@@ -9,7 +9,7 @@
 // @grant        none
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     // Global variables
@@ -27,7 +27,8 @@
         inProduction: true,
         width: 330,
         theme: 'dark',
-        anchor: 'left'
+        anchor: 'left',
+        totalStorage: 1000000
     };
 
     // Sellable items configuration
@@ -51,11 +52,11 @@
     };
 
     function formatNumber(num) {
-    return num.toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-    });
-}
+        return num.toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
 
     // Create and inject CSS
     const createStyles = () => {
@@ -496,6 +497,39 @@
                 width: 20%;
                 align-items: center;
             }
+
+            /* Toast Notifications */
+            #toast-container {
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                z-index: 10001;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .toast {
+                padding: 12px 20px;
+                border-radius: 4px;
+                color: white;
+                font-size: 14px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                opacity: 0;
+                transform: translateY(20px);
+                transition: opacity 0.3s, transform 0.3s;
+                min-width: 200px;
+                max-width: 400px;
+            }
+
+            .toast.visible {
+                opacity: 1;
+                transform: translateY(0);
+            }
+
+            .toast.success { background-color: #4caf50; }
+            .toast.error { background-color: #f44336; }
+            .toast.info { background-color: #2196f3; }
         `;
         document.head.appendChild(style);
     };
@@ -516,6 +550,36 @@
             if (item.name.includes(packName)) return iconUrl;
         }
         return item.icon;
+    };
+
+    const showToast = (message, type = 'info') => {
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+
+        container.appendChild(toast);
+
+        // Trigger reflow
+        toast.offsetHeight;
+
+        toast.classList.add('visible');
+
+        setTimeout(() => {
+            toast.classList.remove('visible');
+            setTimeout(() => {
+                toast.remove();
+                if (container.children.length === 0) {
+                    container.remove();
+                }
+            }, 300);
+        }, 3000);
     };
 
     // Cache Management
@@ -616,13 +680,13 @@
 
         const status = {
             usedStorage: 0,
-            totalStorage: 1000000,
+            totalStorage: config.totalStorage || 1000000,
             storagePercentage: '0%'
         };
 
         if (mainStorage?.items) {
             status.usedStorage = mainStorage.items.reduce((total, item) =>
-                                                          total + (item.attributes?.storage || 0), 0);
+                total + (item.attributes?.storage || 0), 0);
             status.storagePercentage = ((status.usedStorage / status.totalStorage) * 100).toFixed(1) + '%';
         }
 
@@ -719,20 +783,20 @@
                     if (item.name.includes('House')) {
                         expirationClass = item.active.time_left < 86400 ?
                             'house-expiring-very-soon' :
-                        item.active.time_left < 604800 ? 'house-expiring-soon' : '';
+                            item.active.time_left < 604800 ? 'house-expiring-soon' : '';
                     }
                 }
 
                 if (item.id == "raw_7_1") {
                     item.industryId = 7;
                     item.quality = 1;
-                } else if(item.id == "raw_12_1") {
+                } else if (item.id == "raw_12_1") {
                     item.industryId = 12;
                     item.quality = 1;
-                } else if(item.id == "raw_17_1") {
+                } else if (item.id == "raw_17_1") {
                     item.industryId = 17;
                     item.quality = 1;
-                } else if(item.id == "raw_24_1") {
+                } else if (item.id == "raw_24_1") {
                     item.industryId = 24;
                     item.quality = 1;
                 }
@@ -772,8 +836,8 @@
         let totalSale = 0;
         let totalSaleNet = 0;
         offers.forEach((offer) => {
-            totalSale += offer.amount*offer.price;
-            totalSaleNet += offer.amount*offer.netPrice;
+            totalSale += offer.amount * offer.price;
+            totalSaleNet += offer.amount * offer.netPrice;
             html += `
                 <li class="offer" data-id="${offer.id}">
                     <div class="offer-images">
@@ -831,6 +895,7 @@
             displayInventoryData(processedData);
         } catch (error) {
             console.error('Error fetching inventory data:', error);
+            showToast('Failed to update inventory', 'error');
         }
     };
 
@@ -842,6 +907,7 @@
             displayOffersData(data);
         } catch (error) {
             console.error('Error fetching offers data:', error);
+            showToast('Failed to update offers', 'error');
         }
     };
 
@@ -880,7 +946,7 @@
         const quantity = document.getElementById('sale-quantity').value;
 
         if (!price || !quantity || price <= 0 || quantity <= 0) {
-            alert('Please enter valid price and quantity.');
+            showToast('Please enter valid price and quantity.', 'error');
             return;
         }
 
@@ -909,12 +975,13 @@
                 saleModal.style.display = 'none';
                 updateInventoryOverview();
                 updateOffersOverview();
+                showToast('Item listed successfully', 'success');
             } else {
-                alert('Failed to list item for sale: ' + (data.message || 'Unknown error'));
+                showToast('Failed to list item: ' + (data.message || 'Unknown error'), 'error');
             }
         } catch (error) {
             console.error('Error:', error);
-            alert('Error while listing item for sale.');
+            showToast('Error while listing item for sale.', 'error');
         }
     };
 
@@ -939,12 +1006,13 @@
             if (!data.error) {
                 saleModal.style.display = 'none';
                 updateOffersOverview();
+                showToast('Offer deleted successfully', 'success');
             } else {
-                alert('Failed to delete offer: ' + (data.message || 'Unknown error'));
+                showToast('Failed to delete offer: ' + (data.message || 'Unknown error'), 'error');
             }
         } catch (error) {
             console.error('Error:', error);
-            alert('Error while deleting the offer.');
+            showToast('Error while deleting the offer.', 'error');
         }
     }
 
@@ -983,6 +1051,10 @@
             <label>
                 Width: <span id="width-value">330</span>px
                 <input type="range" id="width-slider" min="200" max="500" step="10" value="330">
+            </label>
+            <label>
+                Total Storage:
+                <input type="number" id="config-total-storage" min="1000" step="1000" value="1000000" style="width: 100px;">
             </label>
             <label><input type="checkbox" id="config-theme"> Use Light Theme</label>
             <div>
@@ -1082,6 +1154,12 @@
         widthValue.textContent = config.width;
         inventoryOverview.style.width = `${config.width}px`;
 
+        // Initialize storage input
+        const storageInput = document.getElementById('config-total-storage');
+        if (storageInput) {
+            storageInput.value = config.totalStorage || 1000000;
+        }
+
         // Initialize theme
         document.getElementById('config-theme').checked = config.theme === 'light';
 
@@ -1139,7 +1217,8 @@
                 inProduction: document.getElementById('config-in-production').checked,
                 width: parseInt(widthSlider.value),
                 theme: document.getElementById('config-theme').checked ? 'light' : 'dark',
-                anchor: document.querySelector('input[name="anchor"]:checked').value
+                anchor: document.querySelector('input[name="anchor"]:checked').value,
+                totalStorage: parseInt(document.getElementById('config-total-storage').value) || 1000000
             };
 
             configManager.save(config);
