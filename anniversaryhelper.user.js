@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Anniversary Quest Helper
-// @version      1.7
+// @version      1.8
 // @description  Displays total remaining time for locked locations and required miles and tokens for unclaimed locations for the Anniversary Quest on eRepublik.
 // @author       Curlybear
 // @match        https://www.erepublik.com/*/main/anniversaryQuest
@@ -11,13 +11,13 @@
 // @grant        none
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     const DATA_URL = "https://www.erepublik.com/en/main/anniversaryQuestData";
 
     // Fetch the data
-    $.getJSON(DATA_URL, function(data) {
+    $.getJSON(DATA_URL, function (data) {
         const inventory = data.status.inventory;
         const progress = data.status.progress;
         const queue = data.status.queue;
@@ -38,9 +38,9 @@
             }
         }
 
-        // Add remaining time for the first unlocking location in the queue
+        // Add remaining time for the last unlocking location in the queue (times are cumulative)
         if (queue.length > 0) {
-            totalRemainingTime += queue[0].remainingTime || 0;
+            totalRemainingTime += queue[queue.length - 1].remainingTime || 0;
         }
 
         // Calculate totals for unlocked but unclaimed locations
