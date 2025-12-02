@@ -13,11 +13,74 @@
 
     const $j = window.jQuery;
 
+    function addStyles() {
+        if (document.getElementById('cm-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'cm-styles';
+        style.textContent = `
+            .company-manager-ui {
+                padding: 10px;
+                background: #f2f5f7;
+                margin-top: 10px;
+                border-radius: 3px;
+                display: flex;
+                gap: 10px;
+                align-items: center;
+                border: 1px solid #e0e0e0;
+            }
+            .cm-custom-select {
+                appearance: none;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                background-color: #fff;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 0 30px 0 10px;
+                font-family: "Arial", sans-serif;
+                font-size: 12px;
+                font-weight: bold;
+                color: #555;
+                cursor: pointer;
+                height: 30px;
+                line-height: 28px;
+                background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2210%22%20height%3D%226%22%20viewBox%3D%220%200%2010%206%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M1%201L5%205L9%201%22%20stroke%3D%22%23666666%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E');
+                background-repeat: no-repeat;
+                background-position: right 10px center;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                transition: border-color 0.2s, box-shadow 0.2s;
+            }
+            .cm-custom-select:hover {
+                border-color: #999;
+                color: #333;
+            }
+            .cm-custom-select:focus {
+                border-color: #3c8dbc;
+                box-shadow: 0 0 0 2px rgba(60, 141, 188, 0.2);
+                outline: none;
+            }
+            .company-manager-ui .std_global_btn {
+                height: 30px;
+                line-height: 28px;
+                padding: 0 15px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0;
+                vertical-align: middle;
+                box-sizing: border-box;
+                top: 0;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
     function initCompanyManager() {
         if (!$j) {
             console.error("jQuery not found");
             return;
         }
+
+        addStyles();
 
         const userLocationText = $j('.user_location .name').text().trim();
         if (!userLocationText) {
@@ -44,13 +107,13 @@
         // Prevent double injection
         if (header.find('.company-manager-ui').length > 0) return;
 
-        const uiContainer = $j('<div class="company-manager-ui" style="padding: 5px; background: #f0f0f0; margin-top: 5px; border-radius: 5px; display: flex; gap: 10px; align-items: center;"></div>');
+        const uiContainer = $j('<div class="company-manager-ui"></div>');
 
         // Industry Dropdown
-        const industrySelect = $j('<select id="cm-industry"><option value="all">All Industries</option><option value="food">Food</option><option value="food_raw">Food Raw</option><option value="weapon">Weapon</option><option value="weapon_raw">Weapon Raw</option><option value="house">House</option><option value="house_raw">House Raw</option><option value="aircraft">Aircraft</option><option value="aircraft_raw">Aircraft Raw</option></select>');
+        const industrySelect = $j('<select id="cm-industry" class="cm-custom-select"><option value="all">All Industries</option><option value="food">Food</option><option value="food_raw">Food Raw</option><option value="weapon">Weapon</option><option value="weapon_raw">Weapon Raw</option><option value="house">House</option><option value="house_raw">House Raw</option><option value="aircraft">Aircraft</option><option value="aircraft_raw">Aircraft Raw</option></select>');
 
         // Quality Dropdown
-        const qualitySelect = $j('<select id="cm-quality"><option value="all">All Qualities</option><option value="q1">Q1</option><option value="q2">Q2</option><option value="q3">Q3</option><option value="q4">Q4</option><option value="q5">Q5</option><option value="q6">Q6</option><option value="q7">Q7</option></select>');
+        const qualitySelect = $j('<select id="cm-quality" class="cm-custom-select"><option value="all">All Qualities</option><option value="q1">Q1</option><option value="q2">Q2</option><option value="q3">Q3</option><option value="q4">Q4</option><option value="q5">Q5</option><option value="q6">Q6</option><option value="q7">Q7</option></select>');
 
         // Buttons
         const selectBtn = $j('<button class="std_global_btn smallSize blueColor">Select</button>');
