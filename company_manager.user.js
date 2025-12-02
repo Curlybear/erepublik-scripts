@@ -70,6 +70,51 @@
                 box-sizing: border-box;
                 top: 0;
             }
+            .cm-checkbox-container {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                font-size: 11px;
+                color: #555;
+                font-weight: bold;
+                cursor: pointer;
+                user-select: none;
+            }
+            .cm-checkbox-container input {
+                margin: 0;
+                cursor: pointer;
+            }
+            /* Toast Notifications */
+            #toast-container {
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                z-index: 10001;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .toast {
+                padding: 12px 20px;
+                border-radius: 4px;
+                color: white;
+                font-size: 14px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                opacity: 0;
+                transform: translateY(20px);
+                transition: opacity 0.3s, transform 0.3s;
+                min-width: 200px;
+                max-width: 400px;
+                font-family: Arial, sans-serif;
+            }
+            .toast.visible {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            .toast.success { background-color: #4caf50; }
+            .toast.error { background-color: #f44336; }
+            .toast.info { background-color: #2196f3; }
+            .toast.warning { background-color: #ff9800; }
         `;
         document.head.appendChild(style);
     }
@@ -103,6 +148,36 @@
         });
     }
 
+    function showToast(message, type = 'info') {
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+
+        container.appendChild(toast);
+
+        // Trigger reflow
+        toast.offsetHeight;
+
+        toast.classList.add('visible');
+
+        setTimeout(() => {
+            toast.classList.remove('visible');
+            setTimeout(() => {
+                toast.remove();
+                if (container.children.length === 0) {
+                    container.remove();
+                }
+            }, 300);
+        }, 3000);
+    }
+
     function injectManagerUI(header, group) {
         // Prevent double injection
         if (header.find('.company-manager-ui').length > 0) return;
@@ -120,17 +195,21 @@
         const unselectBtn = $j('<button class="std_global_btn smallSize whiteColor">Unselect</button>');
         const resetBtn = $j('<button class="std_global_btn smallSize redColor" title="Reset All"><i class="fa fa-refresh"></i> ⟳</button>');
 
+        // Checkbox
+        const limitCheckbox = $j('<label class="cm-checkbox-container"><input type="checkbox" id="cm-limit-energy"> Limit by Energy</label>');
+
         // Event Listeners
         selectBtn.click(function (e) {
             e.preventDefault();
             e.stopPropagation(); // Prevent header toggle
-            applySelection(group, industrySelect.val(), qualitySelect.val(), true);
+            const limitByEnergy = limitCheckbox.find('input').is(':checked');
+            applySelection(group, industrySelect.val(), qualitySelect.val(), true, limitByEnergy);
         });
 
         unselectBtn.click(function (e) {
             e.preventDefault();
             e.stopPropagation();
-            applySelection(group, industrySelect.val(), qualitySelect.val(), false);
+            applySelection(group, industrySelect.val(), qualitySelect.val(), false, false);
         });
 
         resetBtn.click(function (e) {
@@ -139,11 +218,12 @@
             resetSelection(group);
         });
 
-        // Stop propagation on clicks to dropdowns to prevent header collapsing
+        // Stop propagation on clicks to dropdowns/checkbox to prevent header collapsing
         industrySelect.click(function (e) { e.stopPropagation(); });
         qualitySelect.click(function (e) { e.stopPropagation(); });
+        limitCheckbox.click(function (e) { e.stopPropagation(); });
 
-        uiContainer.append(industrySelect, qualitySelect, selectBtn, unselectBtn, resetBtn);
+        uiContainer.append(industrySelect, qualitySelect, selectBtn, unselectBtn, resetBtn, limitCheckbox);
         header.append(uiContainer);
     }
 
@@ -213,7 +293,22 @@
         'house_q7.png': { industry: 'house', quality: 'q7' }
     };
 
-    function applySelection(group, targetIndustry, targetQuality, isSelect) {
+    function applySelection(group, targetIndustry, targetQuality, isSelect, limitByEnergy = false) {
+        let maxCompanies = Infinity;
+        let selectedCount = 0;
+
+        if (isSelect && limitByEnergy) {
+            if (typeof erepublik !== 'undefined' && erepublik.citizen && erepublik.citizen.energy) {
+                const currentEnergy = erepublik.citizen.energy;
+                maxCompanies = Math.floor(currentEnergy / 10);
+                console.log(`Energy: ${currentEnergy}, Max Companies: ${maxCompanies}`);
+            } else {
+                console.warn("Energy variable not found");
+            }
+        }
+
+        let companiesToSelect = [];
+
         group.find('.listing.companies').each(function () {
             const company = $j(this);
             const imgSrc = company.find('.area_pic img')[2].src || '';
@@ -250,12 +345,27 @@
                 const isActive = workBtn.hasClass('active');
 
                 if (isSelect && !isActive) {
-                    workBtn.click();
+                    companiesToSelect.push(workBtn);
                 } else if (!isSelect && isActive) {
                     workBtn.click();
                 }
             }
         });
+
+        if (isSelect) {
+            let limitReached = false;
+            for (let i = 0; i < companiesToSelect.length; i++) {
+                if (limitByEnergy && (i + 1) > maxCompanies) {
+                    limitReached = true;
+                    break;
+                }
+                companiesToSelect[i].click();
+            }
+
+            if (limitReached) {
+                showToast(`Selection limited by energy! Selected ${maxCompanies} companies.`, 'warning');
+            }
+        }
     }
 
     function resetSelection(group) {
