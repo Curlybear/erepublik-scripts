@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         eRepublik Inventory Overview
 // @author       Curlybear
-// @version      2.1
+// @version      2.2
 // @description  Display a customizable inventory overview
 // @updateURL    https://curlybear.eu/erep/inventoryoverview.user.js
 // @downloadURL  https://curlybear.eu/erep/inventoryoverview.user.js
@@ -764,7 +764,6 @@
         let html = `
             <h3>Inventory Overview</h3>
             <div class="storage-info">Storage: ${status.usedStorage} / ${status.totalStorage} (${status.storagePercentage})</div>
-            <div class="storage-info">Possibly broken atm fix soon(tm)</div>
         `;
 
         const addItems = (category, items, configKey, itemFilter) => {
