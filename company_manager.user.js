@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         Company Manager
-// @namespace    http://tampermonkey.net/
 // @version      0.1
 // @description  Streamline company management in eRepublik
+// @updateURL    https://curlybear.eu/erep/company_manager.user.js
+// @downloadURL  https://curlybear.eu/erep/company_manager.user.js
 // @author       Curlybear
 // @match        https://www.erepublik.com/*/economy/myCompanies*
 // @grant        none
