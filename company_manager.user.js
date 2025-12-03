@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.1
+// @version      0.2
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
@@ -312,16 +312,22 @@
 
         group.find('.listing.companies').each(function () {
             const company = $j(this);
-            const imgSrc = company.find('.area_pic img')[2].src || '';
+            let companyInfo = null;
 
-            // Extract filename from src (e.g., "grain.png" from ".../grain.png")
-            const filename = imgSrc.split('/').pop();
-            const companyInfo = companyDefinitions[filename];
+            // Iterate through images to find the one matching a defined company type
+            // Non-raw industries have an extra upgrade button, shifting the index
+            company.find('.area_pic img').each(function () {
+                const src = this.src;
+                const fname = src.split('/').pop();
+                if (companyDefinitions[fname]) {
+                    companyInfo = companyDefinitions[fname];
+                    return false; // Break the loop
+                }
+            });
 
             if (!companyInfo) {
                 // Fallback or ignore if unknown image
-                console.log("Something ficked up")
-                console.log(filename)
+                console.log("Could not identify company type from images");
                 return;
             }
 
