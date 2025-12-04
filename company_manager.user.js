@@ -1,18 +1,19 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.2
+// @version      0.3
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
 // @author       Curlybear
 // @match        https://www.erepublik.com/*/economy/myCompanies*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    const $j = window.jQuery;
+    const $j = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).jQuery;
 
     function addStyles() {
         if (document.getElementById('cm-styles')) return;
@@ -116,6 +117,136 @@
             .toast.error { background-color: #f44336; }
             .toast.info { background-color: #2196f3; }
             .toast.warning { background-color: #ff9800; }
+
+            .cm-panel-wrapper {
+                position: absolute;
+                top: 0;
+                left: 100%; /* Position to the right of the listing holder */
+                bottom: 0;
+                display: flex;
+                align-items: flex-start;
+                z-index: 999;
+                pointer-events: none;
+            }
+
+            .cm-panel-toggle {
+                position: absolute;
+                right: 100%; /* Anchor to left side of panel (inside listing holder) */
+                top: 10px;
+                width: 30px;
+                height: 30px;
+                background: #4d93bc;
+                color: white;
+                border: none;
+                border-radius: 3px 0 0 3px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 16px;
+                box-shadow: -2px 0 2px rgba(0,0,0,0.1);
+                pointer-events: auto;
+            }
+            .cm-panel-toggle:hover {
+                background: #56afe4;
+            }
+
+            .cm-panel-container {
+                width: 0;
+                background: #fff;
+                border: 1px solid #e0e0e0; /* Border all around */
+                box-shadow: 2px 0 5px rgba(0,0,0,0.1); /* Shadow to right */
+                transition: width 0.3s ease;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+                pointer-events: auto;
+                height: 100%;
+                box-sizing: border-box;
+            }
+            
+            .cm-panel-container * {
+                box-sizing: border-box;
+            }
+
+            .cm-panel-wrapper.expanded .cm-panel-container {
+                width: 300px;
+            }
+
+            /* Adjust listing_holder to be relative for absolute positioning of panel */
+            .listing_holder {
+                position: relative; 
+            }
+
+            .cm-panel-content {
+                padding: 15px;
+                overflow-y: auto;
+                width: 300px; /* Fixed width for content to prevent reflow during anim */
+            }
+            
+            .cm-holding-stats {
+                margin-bottom: 20px;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+            }
+            .cm-holding-stats:last-child {
+                border-bottom: none;
+            }
+            .cm-holding-title {
+                font-weight: bold;
+                color: #4d93bc;
+                margin-bottom: 10px;
+                font-size: 14px;
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                user-select: none;
+            }
+            .cm-holding-title:hover {
+                color: #56afe4;
+            }
+            .cm-holding-title::after {
+                content: '▼';
+                font-size: 10px;
+                transition: transform 0.2s;
+            }
+            .cm-holding-title.collapsed::after {
+                transform: rotate(-90deg);
+            }
+            
+            .cm-holding-details {
+                display: block;
+            }
+            .cm-holding-details.collapsed {
+                display: none;
+            }
+            
+            .cm-stat-row {
+                display: flex;
+                justify-content: space-between;
+                font-size: 12px;
+                margin-bottom: 5px;
+                color: #555;
+            }
+            .cm-stat-label {
+                font-weight: bold;
+            }
+            .cm-productivity-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 5px;
+                font-size: 11px;
+            }
+            .cm-productivity-table th, .cm-productivity-table td {
+                border: 1px solid #eee;
+                padding: 3px;
+                text-align: center;
+            }
+            .cm-productivity-table th {
+                background: #f9f9f9;
+                color: #666;
+            }
         `;
         document.head.appendChild(style);
     }
@@ -145,6 +276,233 @@
             if (holdingLocationText.includes(userLocationText)) {
                 console.log("Match found for holding:", holdingLocationText);
                 injectManagerUI(header, group);
+            }
+        });
+
+        initPanel();
+    }
+
+    function initPanel() {
+        const listingHolder = $j('.listing_holder');
+        if (listingHolder.length === 0) return;
+
+        // Create Panel Wrapper
+        const wrapper = $j(`
+            <div class="cm-panel-wrapper" id="cm-panel-wrapper">
+                <button class="cm-panel-toggle" id="cm-panel-toggle" title="Toggle Info Panel">
+                    <i class="fa fa-chevron-left"></i>
+                </button>
+                <div class="cm-panel-container" id="cm-info-panel">
+                    <div class="cm-panel-content" id="cm-panel-content">
+                        <div style="text-align:center; color:#999;">Loading data...</div>
+                    </div>
+                </div>
+            </div>
+        `);
+
+        listingHolder.append(wrapper);
+
+        // Toggle Logic
+        const toggleBtn = wrapper.find('#cm-panel-toggle');
+        toggleBtn.click(function () {
+            wrapper.toggleClass('expanded');
+            const icon = wrapper.hasClass('expanded') ? 'fa-chevron-right' : 'fa-chevron-left';
+            toggleBtn.find('i').attr('class', `fa ${icon}`);
+        });
+
+        // Scrape and Fetch Data
+        const holdings = scrapeHoldings();
+        renderPanel(holdings); // Render initial structure
+
+        // Fetch productivity for each holding
+        holdings.forEach(holding => {
+            fetchProductivity(holding.region).then(data => {
+                if (data) {
+                    updateHoldingProductivity(holding.id, data);
+                }
+            });
+        });
+    }
+
+    function scrapeHoldings() {
+        const holdings = [];
+        // Exclude the last companies_group as it is the "Unassigned companies" placeholder
+        const groups = $j('.companies_group').not(':last');
+
+        groups.each(function (index) {
+            const group = $j(this);
+
+            // Extract region name: "City, Region, Country" -> "Region"
+            const fullLocation = group.find('.companies_header .location').text().trim();
+            const parts = fullLocation.split(',');
+            const region = parts.length >= 2 ? parts[1].trim() : fullLocation;
+
+            const id = `holding-${index}`;
+
+            const companies = {};
+
+            group.find('.listing.companies').each(function () {
+                const company = $j(this);
+                company.find('.area_pic img').each(function () {
+                    const src = this.src;
+                    const fname = src.split('/').pop();
+                    if (companyDefinitions[fname]) {
+                        const def = companyDefinitions[fname];
+                        const key = `${def.industry}_${def.quality}`;
+                        if (!companies[key]) {
+                            companies[key] = { ...def, count: 0 };
+                        }
+                        companies[key].count++;
+                        return false;
+                    }
+                });
+            });
+
+            holdings.push({
+                id: id,
+                region: region,
+                companies: companies
+            });
+        });
+        return holdings;
+    }
+
+    function fetchProductivity(regionName) {
+        return new Promise((resolve) => {
+            // Slugify: "Southern Cyprus" -> "Southern-Cyprus", "Pohja-Eesti" -> "Pohja-Eesti"
+            // 1. Lowercase everything
+            // 2. Replace spaces with dashes
+            // 3. Capitalize first letter and any letter after a dash
+            const slug = regionName.toLowerCase()
+                .replace(/\s+/g, '-')
+                .replace(/(^|-)([a-z])/g, (match) => match.toUpperCase());
+
+            console.log(`Fetching productivity for: ${regionName} -> ${slug}`);
+
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: `https://productivityapi.curlybear.eu/productivity/?permalink=${slug}`,
+                headers: {
+                    'Accept': 'application/json'
+                },
+                onload: function (response) {
+                    if (response.status === 200) {
+                        try {
+                            const data = JSON.parse(response.responseText);
+                            resolve(data[0]); // API returns an array
+                        } catch (e) {
+                            console.error("Error parsing API response", e);
+                            resolve(null);
+                        }
+                    } else {
+                        console.warn(`API Error ${response.status} for ${slug}`);
+                        resolve(null);
+                    }
+                },
+                onerror: function (err) {
+                    console.error("API Request Failed", err);
+                    resolve(null);
+                }
+            });
+        });
+    }
+
+    function renderPanel(holdings) {
+        const content = $j('#cm-panel-content');
+        content.empty();
+
+        if (holdings.length === 0) {
+            content.html('<div style="text-align:center; color:#999;">No holdings found.</div>');
+            return;
+        }
+
+        holdings.forEach(holding => {
+            const holdingDiv = $j(`<div class="cm-holding-stats" id="${holding.id}"></div>`);
+
+            // Title with Toggle
+            const title = $j(`<div class="cm-holding-title">${holding.region}</div>`);
+            holdingDiv.append(title);
+
+            // Details Container
+            const detailsDiv = $j(`<div class="cm-holding-details"></div>`);
+
+            // Group by Industry
+            const byIndustry = {};
+            Object.values(holding.companies).forEach(c => {
+                if (!byIndustry[c.industry]) byIndustry[c.industry] = [];
+                byIndustry[c.industry].push(c);
+            });
+
+            // Render per Industry
+            Object.entries(byIndustry).forEach(([ind, companies]) => {
+                // Format industry name
+                const indName = ind.replace('_raw', ' Raw').replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+                const indDiv = $j(`<div class="cm-industry-group" style="margin-bottom:10px;"></div>`);
+                indDiv.append(`<div style="font-weight:bold; font-size:12px; color:#555; border-bottom:1px solid #eee; margin-bottom:5px;">${indName}</div>`);
+
+                companies.sort((a, b) => {
+                    // Sort by quality: q1 < q2 ... < q7
+                    const qA = parseInt(a.quality.replace('q', '')) || 0;
+                    const qB = parseInt(b.quality.replace('q', '')) || 0;
+                    return qA - qB;
+                });
+
+                companies.forEach(c => {
+                    // Determine productivity key
+                    let prodKey = '';
+                    if (c.industry.endsWith('_raw')) {
+                        // food_raw -> frm_productivity
+                        const prefix = c.industry.charAt(0);
+                        prodKey = `${prefix}rm_productivity`;
+                    } else {
+                        // food, q1 -> food_1_productivity
+                        const qNum = c.quality.replace('q', '');
+                        prodKey = `${c.industry}_${qNum}_productivity`;
+                    }
+
+                    const row = $j(`
+                        <div class="cm-stat-row">
+                            <span style="flex:1;">${c.quality.toUpperCase()}</span>
+                            <span style="flex:1; text-align:center;">x${c.count}</span>
+                            <span style="flex:1; text-align:right;" class="cm-prod-val" data-prod-key="${prodKey}">...</span>
+                        </div>
+                     `);
+                    indDiv.append(row);
+                });
+
+                detailsDiv.append(indDiv);
+            });
+
+            holdingDiv.append(detailsDiv);
+
+            // Toggle Event
+            title.click(function () {
+                title.toggleClass('collapsed');
+                detailsDiv.toggleClass('collapsed');
+            });
+
+            content.append(holdingDiv);
+        });
+    }
+
+    function updateHoldingProductivity(holdingId, data) {
+        const container = $j(`#${holdingId}`);
+        if (!data) {
+            container.find('.cm-prod-val').text('N/A');
+            return;
+        }
+
+        container.find('.cm-prod-val').each(function () {
+            const el = $j(this);
+            const key = el.attr('data-prod-key');
+            if (key && data[key] !== undefined) {
+                const val = (data[key] * 100).toFixed(0);
+                el.text(`${val}%`);
+                // Color coding
+                if (val >= 100) el.css('color', 'green');
+                else el.css('color', 'orange');
+            } else {
+                el.text('-');
             }
         });
     }
