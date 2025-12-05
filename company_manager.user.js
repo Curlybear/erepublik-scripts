@@ -343,6 +343,8 @@
 
             group.find('.listing.companies').each(function () {
                 const company = $j(this);
+                const isWorkable = !company.hasClass('disabled');
+
                 company.find('.area_pic img').each(function () {
                     const src = this.src;
                     const fname = src.split('/').pop();
@@ -350,9 +352,12 @@
                         const def = companyDefinitions[fname];
                         const key = `${def.industry}_${def.quality}`;
                         if (!companies[key]) {
-                            companies[key] = { ...def, count: 0 };
+                            companies[key] = { ...def, count: 0, workableCount: 0 };
                         }
                         companies[key].count++;
+                        if (isWorkable && !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(def.industry)) {
+                            companies[key].workableCount++;
+                        }
                         return false;
                     }
                 });
@@ -463,7 +468,7 @@
                     const row = $j(`
                         <div class="cm-stat-row">
                             <span style="flex:1;">${c.quality.toUpperCase()}</span>
-                            <span style="flex:1; text-align:center;">x${c.count}</span>
+                            <span style="flex:1; text-align:center;">x${c.count} (${c.workableCount})</span>
                             <span style="flex:1; text-align:right;" class="cm-prod-val" data-prod-key="${prodKey}">...</span>
                         </div>
                      `);
@@ -472,6 +477,11 @@
 
                 detailsDiv.append(indDiv);
             });
+
+            // Total Workable Summary
+            let totalWorkable = 0;
+            Object.values(holding.companies).forEach(c => totalWorkable += c.workableCount);
+            detailsDiv.append(`<div style="font-size:11px; color:#777; margin-top:5px; text-align:right;">Total Workable: ${totalWorkable}</div>`);
 
             holdingDiv.append(detailsDiv);
 
