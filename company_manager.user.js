@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.3
+// @version      0.4
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
@@ -322,6 +322,28 @@
                 }
             });
         });
+
+        updateHeaders(holdings);
+    }
+
+    function updateHeaders(holdings) {
+        const groups = $j('.companies_group').not(':last');
+        groups.each(function (index) {
+            if (index >= holdings.length) return;
+
+            const group = $j(this);
+            const holding = holdings[index];
+            const headerNumber = group.find('.companies_header .number');
+
+            // Avoid duplicate injection
+            if (group.find('.cm-header-stats').length > 0) return;
+
+            const statsSpan = $j(`<span class="cm-header-stats" style="margin-left: 10px; font-size: 12px; font-weight: bold; color: #4d93bc;" title="Workable Companies / Total Manager Companies">
+                (${holding.totalWorkable} / ${holding.totalManager})
+            </span>`);
+
+            headerNumber.after(statsSpan);
+        });
     }
 
     function scrapeHoldings() {
@@ -340,6 +362,8 @@
             const id = `holding-${index}`;
 
             const companies = {};
+            let totalWorkable = 0;
+            let totalManager = 0;
 
             group.find('.listing.companies').each(function () {
                 const company = $j(this);
@@ -355,8 +379,16 @@
                             companies[key] = { ...def, count: 0, workableCount: 0 };
                         }
                         companies[key].count++;
-                        if (isWorkable && !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(def.industry)) {
+
+                        const isManagerWorkable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(def.industry);
+
+                        if (isWorkable && isManagerWorkable) {
                             companies[key].workableCount++;
+                            totalWorkable++;
+                        }
+
+                        if (isManagerWorkable) {
+                            totalManager++;
                         }
                         return false;
                     }
@@ -366,7 +398,9 @@
             holdings.push({
                 id: id,
                 region: region,
-                companies: companies
+                companies: companies,
+                totalWorkable: totalWorkable,
+                totalManager: totalManager
             });
         });
         return holdings;
