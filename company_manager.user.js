@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.4
+// @version      0.5
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
@@ -117,6 +117,36 @@
             .toast.error { background-color: #f44336; }
             .toast.info { background-color: #2196f3; }
             .toast.warning { background-color: #ff9800; }
+            
+            /* Employee Manager Specific Styles */
+            #cm-employee-manager {
+                background: #e1f5fe; /* Light blue background to distinguish */
+                justify-content: flex-start;
+                flex-wrap: wrap;
+            }
+            #cm-employee-manager .cm-custom-select {
+                min-width: 100px;
+            }
+            #cm-employee-manager label {
+                font-weight: bold;
+                color: #4d93bc;
+                font-size: 11px;
+                margin-right: 5px;
+            }
+            #cm-amount-input {
+                width: 60px;
+                height: 30px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 0 5px;
+                text-align: center;
+                font-weight: bold;
+                color: #555;
+            }
+            #cm-amount-input:focus {
+                border-color: #3c8dbc;
+                outline: none;
+            }
 
             .cm-panel-wrapper {
                 position: absolute;
@@ -280,6 +310,310 @@
         });
 
         initPanel();
+        injectEmployeeManagerUI();
+    }
+
+    function injectEmployeeManagerUI() {
+        const listingHolder = $j('.listing_holder');
+        const heading = listingHolder.find('.heading');
+
+        if (heading.length === 0 || $j('#cm-employee-manager').length > 0) return;
+
+        // Build Holding Options
+        let holdingOptions = '<option value="all">All Holdings</option>';
+        $j('.companies_group').not(':last').each(function (index) {
+            const group = $j(this);
+            const fullLocation = group.find('.companies_header .location').text().trim();
+            const parts = fullLocation.split(',');
+            const region = parts.length >= 2 ? parts[1].trim() : fullLocation;
+
+            // Check if we can get a better ID, but index based matches `scrapeHoldings` logic mostly
+            // However, `scrapeHoldings` generates IDs like `holding-0`.
+            // We need to match the filter logic.
+            // Let's use the group ID from the DOM if possible, or fall back to index matching.
+            // The groups have IDs like `holding_135626`.
+            const groupId = group.attr('id');
+            holdingOptions += `<option value="${groupId}">${region}</option>`;
+        });
+
+        const ui = $j(`<div id="cm-employee-manager" class="company-manager-ui">
+            <div style="display:flex; align-items:center; margin-right: 15px;">
+                <label>EMPLOYEES:</label>
+            </div>
+            
+            <div style="display:flex; align-items:center; gap: 5px;">
+                <select id="cm-emp-holding" class="cm-custom-select">${holdingOptions}</select>
+                
+                <select id="cm-emp-industry" class="cm-custom-select">
+                    <option value="all">All Industries</option>
+                    <option value="food">Food</option>
+                    <option value="food_raw">Food Raw</option>
+                    <option value="weapon">Weapon</option>
+                    <option value="weapon_raw">Weapon Raw</option>
+                    <option value="house">House</option>
+                    <option value="house_raw">House Raw</option>
+                    <option value="aircraft">Aircraft</option>
+                    <option value="aircraft_raw">Aircraft Raw</option>
+                </select>
+
+                <select id="cm-emp-quality" class="cm-custom-select">
+                    <option value="all">All Qualities</option>
+                    <option value="q1">Q1</option>
+                    <option value="q2">Q2</option>
+                    <option value="q3">Q3</option>
+                    <option value="q4">Q4</option>
+                    <option value="q5">Q5</option>
+                    <option value="q6">Q6</option>
+                    <option value="q7">Q7</option>
+                </select>
+
+                <input type="number" id="cm-amount-input" min="0" max="100" value="1" title="Number of employees to assign (0 to unassign)">
+
+                <button id="cm-assign-btn" class="std_global_btn smallSize blueColor" title="Assign Employees">Assign</button>
+                
+                <span id="cm-productivity-display" style="margin-left: 10px; font-weight: bold; color: #555; font-size: 11px;"></span>
+            </div>
+            <div id="cm-production-recap" style="width: 100%; margin-top: 8px; font-size: 11px; color: #666; font-style: italic; border-top: 1px dashed #ddd; padding-top: 5px; display:none;">
+                Production: ...
+            </div>
+        </div>`);
+
+        heading.after(ui);
+
+        // Event Listeners
+        ui.find('#cm-assign-btn').click(function (e) {
+            e.preventDefault();
+            const holdingId = $j('#cm-emp-holding').val();
+            const industry = $j('#cm-emp-industry').val();
+            const quality = $j('#cm-emp-quality').val();
+            const amount = parseInt($j('#cm-amount-input').val()) || 0;
+
+            assignEmployees(holdingId, industry, quality, amount);
+        });
+
+        const inputs = ui.find('select');
+        inputs.change(updateStats);
+
+        // Listen for manual (or scripted) changes to assignments
+        $j('.listing_holder').on('click', '.employees_selector a', function () {
+            // Small delay to allow class update to propagate
+            setTimeout(updateStats, 50);
+        });
+
+        // Also update immediately
+        updateStats();
+
+        function updateStats() {
+            const holdingId = $j('#cm-emp-holding').val();
+            const industry = $j('#cm-emp-industry').val();
+            const quality = $j('#cm-emp-quality').val();
+            // Amount input is irrelevant for CURRENT production status
+
+            // Productivity Display
+            const prodSpan = $j('#cm-productivity-display');
+            prodSpan.text('');
+
+            let productivity = 0;
+            if (holdingId !== 'all' && industry !== 'all' && quality !== 'all') {
+                let prodKey = '';
+                if (industry.endsWith('_raw')) {
+                    const prefix = industry.charAt(0);
+                    prodKey = `${prefix}rm_productivity`;
+                } else {
+                    const qNum = quality.replace('q', '');
+                    prodKey = `${industry}_${qNum}_productivity`;
+                }
+
+                const el = $j(`#${holdingId} .cm-prod-val[data-prod-key="${prodKey}"]`);
+                const text = el.first().text();
+                if (text && text.includes('%')) {
+                    productivity = parseInt(text.replace('%', '')) / 100;
+                    prodSpan.text(`Productivity: ${text}`);
+
+                    if (productivity >= 1) prodSpan.css('color', 'green');
+                    else prodSpan.css('color', 'orange');
+                }
+            }
+
+            // Production Recap (Current Active Assignments)
+            // User request: "Stats should not be filtered... calculate for all assigned employees across all holdings"
+            const recapDiv = $j('#cm-production-recap');
+
+            let companies = $j('.companies_group').not(':last');
+            // Previous: if (holdingId !== 'all') companies = $j(`#${holdingId}`);
+            // Fix: Always iterate all groupings to get global production
+
+            let units = {};
+            let hasAssignments = false;
+
+            companies.each(function () {
+                const group = $j(this);
+                // const groupId = group.attr('id'); // Unused with extraction change
+
+                group.find('.listing.companies').each(function () {
+                    const company = $j(this);
+
+                    // Identify company
+                    let companyInfo = null;
+                    company.find('.area_pic img').each(function () {
+                        const fname = this.src.split('/').pop();
+                        if (companyDefinitions[fname]) {
+                            companyInfo = companyDefinitions[fname];
+                            return false;
+                        }
+                    });
+
+                    if (!companyInfo) return;
+
+                    // Filter check REMOVED
+                    // "It should always reflect the production of all the assigned employees"
+                    // if (industry !== 'all' && companyInfo.industry !== industry) return;
+                    // if (quality !== 'all' && companyInfo.quality !== quality) return;
+
+                    // Find CURRENTLY ASSIGNED employees
+                    // Look for active class
+                    const activeBtn = company.find('.employees_selector a.active, .employees_selector a.employee_works_active').last();
+
+                    if (activeBtn.length === 0) return; // No workers assigned
+
+                    const assigned = parseInt(activeBtn.attr('employee')) || 0;
+                    if (assigned <= 0) return;
+
+                    hasAssignments = true;
+
+                    // Get Productivity Multiplier
+                    let mult = 1.0;
+
+                    // User says: "productivity for each company in the b tag with the class resource_bonus"
+                    const bonusEl = company.find('b.resource_bonus');
+                    const bonusText = bonusEl.text().trim();
+
+                    if (bonusText && bonusText.includes('%')) {
+                        // Format is like "195.99%" or "100%"
+                        // "100%" -> 1.0 multiplier
+                        // "195.99%" -> 1.9599 multiplier
+                        mult = parseFloat(bonusText.replace('%', '')) / 100;
+                    }
+
+                    // Add to sum
+                    const produced = assigned * (companyInfo.baseProduction || 0) * mult;
+
+                    const unitKey = `${companyInfo.industry.replace('_raw', ' Raw')} ${companyInfo.quality.toUpperCase()}`;
+                    if (!units[unitKey]) units[unitKey] = 0;
+                    units[unitKey] += produced;
+                });
+            });
+
+            if (Object.keys(units).length > 0) {
+                const parts = [];
+                for (const [u, val] of Object.entries(units)) {
+                    parts.push(`${val.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${u}`);
+                }
+                recapDiv.text(`Production: ${parts.join(', ')}`);
+                recapDiv.show();
+            } else {
+                recapDiv.hide();
+            }
+        }
+    }
+
+    function assignEmployees(holdingId, industry, quality, amount) {
+        let count = 0;
+        let companies = $j('.companies_group').not(':last'); // Exclude unassigned
+        let remainingToAssign = amount;
+
+        if (holdingId !== 'all') {
+            companies = $j(`#${holdingId}`);
+        }
+
+        // If amount is 0, we treat it as "Unassign All" for the filtered group
+        // If amount > 0, we distribute greedily
+        const isUnassign = (amount === 0);
+
+        companies.each(function () {
+            // Stop if we ran out of employees to assign (and not unassigning)
+            if (!isUnassign && remainingToAssign <= 0) return false; // break loop
+
+            const group = $j(this);
+            group.find('.listing.companies').each(function () {
+                if (!isUnassign && remainingToAssign <= 0) return false; // break loop
+
+                const company = $j(this);
+
+                // --- Filter Logic ---
+                let companyInfo = null;
+                company.find('.area_pic img').each(function () {
+                    const src = this.src;
+                    const fname = src.split('/').pop();
+                    if (companyDefinitions[fname]) {
+                        companyInfo = companyDefinitions[fname];
+                        return false;
+                    }
+                });
+
+                if (!companyInfo) return;
+
+                if (industry !== 'all' && companyInfo.industry !== industry) return;
+                if (quality !== 'all' && companyInfo.quality !== quality) return;
+
+                // --- Assignment Logic ---
+                if (isUnassign) {
+                    // Unassign: Find active employee button and click it to toggle off
+                    const activeBtns = company.find('.employees_selector a.active, .employees_selector a.employee_works_active');
+                    if (activeBtns.length > 0) {
+                        activeBtns.last().click();
+                        count++;
+                    }
+                } else {
+                    // Distribute greedy
+                    const limit = parseInt(company.find('.employees_selector').attr('data-employee_limit')) || 0;
+
+                    // How many can we put here?
+                    // We want to fill this company as much as possible with remaining employees
+                    const toAssign = Math.min(remainingToAssign, limit);
+
+                    if (toAssign > 0) {
+                        // Find button for specific amount
+                        const btn = company.find(`.employees_selector a[employee="${toAssign}"]`);
+
+                        if (btn.length > 0) {
+                            // Check if THIS specific button is active
+                            const isActive = btn.hasClass('active') || btn.hasClass('employee_works_active');
+
+                            if (!isActive) {
+                                btn.click();
+                                count++;
+                            }
+
+                            // Deduct from pool
+                            remainingToAssign -= toAssign;
+                        } else {
+                            // Fallback: if we can't find the button (e.g. limit mismatch), 
+                            // we check if we can assign at least something? 
+                            // User requirement implies "fill up", but we only have precise buttons.
+                            // If toAssign is 7, and limit is 10, we click 7.
+                            // If toAssign is 10, and limit is 10, we click 10.
+                            // The logic holds.
+                        }
+                    }
+                }
+            });
+        });
+
+        if (count > 0) {
+            if (isUnassign) {
+                showToast(`Unassigned employees from ${count} companies.`, 'success');
+            } else {
+                const assigned = amount - remainingToAssign; // Calculate actual assigned
+                showToast(`Assigned ${assigned} employees across ${count} companies.`, 'success');
+            }
+        } else {
+            if (!isUnassign && remainingToAssign < amount) {
+                showToast('Assignments partially completed.', 'info');
+            } else {
+                showToast('No eligible companies found or changes needed.', 'info');
+            }
+        }
     }
 
     function initPanel() {
@@ -376,9 +710,12 @@
                         const def = companyDefinitions[fname];
                         const key = `${def.industry}_${def.quality}`;
                         if (!companies[key]) {
-                            companies[key] = { ...def, count: 0, workableCount: 0 };
+                            companies[key] = { ...def, count: 0, workableCount: 0, totalEmployeeSlots: 0 };
                         }
                         companies[key].count++;
+
+                        const employeeLimit = parseInt(company.find('.employees_selector').attr('data-employee_limit')) || 0;
+                        companies[key].totalEmployeeSlots += employeeLimit;
 
                         const isManagerWorkable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(def.industry);
 
@@ -502,7 +839,10 @@
                     const row = $j(`
                         <div class="cm-stat-row">
                             <span style="flex:1;">${c.quality.toUpperCase()}</span>
-                            <span style="flex:1; text-align:center;">x${c.count} (${c.workableCount})</span>
+                            <span style="flex:2; text-align:center;">
+                                <div>x${c.count} (${c.workableCount})</div>
+                                <div style="font-size:10px; color:#999;">Max employees: ${c.totalEmployeeSlots}</div>
+                            </span>
                             <span style="flex:1; text-align:right;" class="cm-prod-val" data-prod-key="${prodKey}">...</span>
                         </div>
                      `);
@@ -632,68 +972,68 @@
 
     const companyDefinitions = {
         // Food Raw
-        'grain.png': { industry: 'food_raw', quality: 'q1' },
-        'fruits.png': { industry: 'food_raw', quality: 'q2' },
-        'fish.png': { industry: 'food_raw', quality: 'q3' },
-        'cattle.png': { industry: 'food_raw', quality: 'q4' },
-        'deer.png': { industry: 'food_raw', quality: 'q5' },
+        'grain.png': { industry: 'food_raw', quality: 'q1', baseProduction: 0.35 },
+        'fruits.png': { industry: 'food_raw', quality: 'q2', baseProduction: 0.70 },
+        'fish.png': { industry: 'food_raw', quality: 'q3', baseProduction: 1.25 },
+        'cattle.png': { industry: 'food_raw', quality: 'q4', baseProduction: 1.75 },
+        'deer.png': { industry: 'food_raw', quality: 'q5', baseProduction: 2.50 },
 
         // Weapon Raw
-        'iron.png': { industry: 'weapon_raw', quality: 'q1' },
-        'oil.png': { industry: 'weapon_raw', quality: 'q2' },
-        'aluminum.png': { industry: 'weapon_raw', quality: 'q3' },
-        'saltpeter.png': { industry: 'weapon_raw', quality: 'q4' },
-        'rubber.png': { industry: 'weapon_raw', quality: 'q5' },
+        'iron.png': { industry: 'weapon_raw', quality: 'q1', baseProduction: 0.35 },
+        'oil.png': { industry: 'weapon_raw', quality: 'q2', baseProduction: 0.70 },
+        'aluminum.png': { industry: 'weapon_raw', quality: 'q3', baseProduction: 1.25 },
+        'saltpeter.png': { industry: 'weapon_raw', quality: 'q4', baseProduction: 1.75 },
+        'rubber.png': { industry: 'weapon_raw', quality: 'q5', baseProduction: 2.50 },
 
         // House Raw
-        'sand.png': { industry: 'house_raw', quality: 'q1' },
-        'clay.png': { industry: 'house_raw', quality: 'q2' },
-        'wood.png': { industry: 'house_raw', quality: 'q3' },
-        'limestone.png': { industry: 'house_raw', quality: 'q4' },
-        'granite.png': { industry: 'house_raw', quality: 'q5' },
+        'sand.png': { industry: 'house_raw', quality: 'q1', baseProduction: 0.35 },
+        'clay.png': { industry: 'house_raw', quality: 'q2', baseProduction: 0.70 },
+        'wood.png': { industry: 'house_raw', quality: 'q3', baseProduction: 1.25 },
+        'limestone.png': { industry: 'house_raw', quality: 'q4', baseProduction: 1.75 },
+        'granite.png': { industry: 'house_raw', quality: 'q5', baseProduction: 2.50 },
 
         // Aircraft Raw
-        'magnesium.png': { industry: 'aircraft_raw', quality: 'q1' },
-        'titanium.png': { industry: 'aircraft_raw', quality: 'q2' },
-        'walfram.png': { industry: 'aircraft_raw', quality: 'q3' },
-        'cobalt.png': { industry: 'aircraft_raw', quality: 'q4' },
-        'neodymium.png': { industry: 'aircraft_raw', quality: 'q5' },
+        'magnesium.png': { industry: 'aircraft_raw', quality: 'q1', baseProduction: 0.35 },
+        'titanium.png': { industry: 'aircraft_raw', quality: 'q2', baseProduction: 0.70 },
+        'walfram.png': { industry: 'aircraft_raw', quality: 'q3', baseProduction: 1.25 },
+        'cobalt.png': { industry: 'aircraft_raw', quality: 'q4', baseProduction: 1.75 },
+        'neodymium.png': { industry: 'aircraft_raw', quality: 'q5', baseProduction: 2.50 },
 
         // Food
-        'food_q1.png': { industry: 'food', quality: 'q1' },
-        'food_q2.png': { industry: 'food', quality: 'q2' },
-        'food_q3.png': { industry: 'food', quality: 'q3' },
-        'food_q4.png': { industry: 'food', quality: 'q4' },
-        'food_q5.png': { industry: 'food', quality: 'q5' },
-        'food_q6.png': { industry: 'food', quality: 'q6' },
-        'food_q7.png': { industry: 'food', quality: 'q7' },
+        'food_q1.png': { industry: 'food', quality: 'q1', baseProduction: 100 },
+        'food_q2.png': { industry: 'food', quality: 'q2', baseProduction: 100 },
+        'food_q3.png': { industry: 'food', quality: 'q3', baseProduction: 100 },
+        'food_q4.png': { industry: 'food', quality: 'q4', baseProduction: 100 },
+        'food_q5.png': { industry: 'food', quality: 'q5', baseProduction: 100 },
+        'food_q6.png': { industry: 'food', quality: 'q6', baseProduction: 100 },
+        'food_q7.png': { industry: 'food', quality: 'q7', baseProduction: 100 },
 
         // Weapon
-        'weapons_q1.png': { industry: 'weapon', quality: 'q1' },
-        'weapons_q2.png': { industry: 'weapon', quality: 'q2' },
-        'weapons_q3.png': { industry: 'weapon', quality: 'q3' },
-        'weapons_q4.png': { industry: 'weapon', quality: 'q4' },
-        'weapons_q5.png': { industry: 'weapon', quality: 'q5' },
-        'weapons_q6.png': { industry: 'weapon', quality: 'q6' },
-        'weapons_q7.png': { industry: 'weapon', quality: 'q7' },
+        'weapons_q1.png': { industry: 'weapon', quality: 'q1', baseProduction: 10 },
+        'weapons_q2.png': { industry: 'weapon', quality: 'q2', baseProduction: 10 },
+        'weapons_q3.png': { industry: 'weapon', quality: 'q3', baseProduction: 10 },
+        'weapons_q4.png': { industry: 'weapon', quality: 'q4', baseProduction: 10 },
+        'weapons_q5.png': { industry: 'weapon', quality: 'q5', baseProduction: 10 },
+        'weapons_q6.png': { industry: 'weapon', quality: 'q6', baseProduction: 10 },
+        'weapons_q7.png': { industry: 'weapon', quality: 'q7', baseProduction: 10 },
 
         // Aircraft
-        'aircraft_weapons_q1.png': { industry: 'aircraft', quality: 'q1' },
-        'aircraft_weapons_q2.png': { industry: 'aircraft', quality: 'q2' },
-        'aircraft_weapons_q3.png': { industry: 'aircraft', quality: 'q3' },
-        'aircraft_weapons_q4.png': { industry: 'aircraft', quality: 'q4' },
-        'aircraft_weapons_q5.png': { industry: 'aircraft', quality: 'q5' },
-        'aircraft_weapons_q6.png': { industry: 'aircraft', quality: 'q6' },
-        'aircraft_weapons_q7.png': { industry: 'aircraft', quality: 'q7' },
+        'aircraft_weapons_q1.png': { industry: 'aircraft', quality: 'q1', baseProduction: 5 },
+        'aircraft_weapons_q2.png': { industry: 'aircraft', quality: 'q2', baseProduction: 5 },
+        'aircraft_weapons_q3.png': { industry: 'aircraft', quality: 'q3', baseProduction: 5 },
+        'aircraft_weapons_q4.png': { industry: 'aircraft', quality: 'q4', baseProduction: 5 },
+        'aircraft_weapons_q5.png': { industry: 'aircraft', quality: 'q5', baseProduction: 5 },
+        'aircraft_weapons_q6.png': { industry: 'aircraft', quality: 'q6', baseProduction: 5 },
+        'aircraft_weapons_q7.png': { industry: 'aircraft', quality: 'q7', baseProduction: 5 },
 
         // House
-        'house_q1.png': { industry: 'house', quality: 'q1' },
-        'house_q2.png': { industry: 'house', quality: 'q2' },
-        'house_q3.png': { industry: 'house', quality: 'q3' },
-        'house_q4.png': { industry: 'house', quality: 'q4' },
-        'house_q5.png': { industry: 'house', quality: 'q5' },
-        'house_q6.png': { industry: 'house', quality: 'q6' },
-        'house_q7.png': { industry: 'house', quality: 'q7' }
+        'house_q1.png': { industry: 'house', quality: 'q1', baseProduction: 0.20 },
+        'house_q2.png': { industry: 'house', quality: 'q2', baseProduction: 0.10 },
+        'house_q3.png': { industry: 'house', quality: 'q3', baseProduction: 0.05 },
+        'house_q4.png': { industry: 'house', quality: 'q4', baseProduction: 0.025 },
+        'house_q5.png': { industry: 'house', quality: 'q5', baseProduction: 0.0166666666666667 },
+        'house_q6.png': { industry: 'house', quality: 'q6', baseProduction: 0.0083333333333333 }, // Extrapolated 1/120
+        'house_q7.png': { industry: 'house', quality: 'q7', baseProduction: 0.0041666666666667 }  // Extrapolated 1/240
     };
 
     function applySelection(group, targetIndustry, targetQuality, isSelect, limitByEnergy = false) {
