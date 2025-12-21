@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.5
+// @version      0.6
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
@@ -1055,6 +1055,9 @@
         group.find('.listing.companies').each(function () {
             const company = $j(this);
             let companyInfo = null;
+
+            // Skip disabled companies
+            if (company.hasClass('disabled')) return;
 
             // Iterate through images to find the one matching a defined company type
             // Non-raw industries have an extra upgrade button, shifting the index
