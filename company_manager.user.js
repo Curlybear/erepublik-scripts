@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.6
+// @version      0.7
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
@@ -14,6 +14,8 @@
     'use strict';
 
     const $j = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).jQuery;
+    let cachedCompanies = [];
+    let updateStatsTimeout;
 
     function addStyles() {
         if (document.getElementById('cm-styles')) return;
@@ -117,7 +119,7 @@
             .toast.error { background-color: #f44336; }
             .toast.info { background-color: #2196f3; }
             .toast.warning { background-color: #ff9800; }
-            
+
             /* Employee Manager Specific Styles */
             #cm-employee-manager {
                 background: #e1f5fe; /* Light blue background to distinguish */
@@ -194,7 +196,7 @@
                 height: 100%;
                 box-sizing: border-box;
             }
-            
+
             .cm-panel-container * {
                 box-sizing: border-box;
             }
@@ -205,7 +207,7 @@
 
             /* Adjust listing_holder to be relative for absolute positioning of panel */
             .listing_holder {
-                position: relative; 
+                position: relative;
             }
 
             .cm-panel-content {
@@ -213,7 +215,7 @@
                 overflow-y: auto;
                 width: 300px; /* Fixed width for content to prevent reflow during anim */
             }
-            
+
             .cm-holding-stats {
                 margin-bottom: 20px;
                 border-bottom: 1px solid #eee;
@@ -244,14 +246,14 @@
             .cm-holding-title.collapsed::after {
                 transform: rotate(-90deg);
             }
-            
+
             .cm-holding-details {
                 display: block;
             }
             .cm-holding-details.collapsed {
                 display: none;
             }
-            
+
             .cm-stat-row {
                 display: flex;
                 justify-content: space-between;
@@ -310,7 +312,47 @@
         });
 
         initPanel();
+        buildCompanyCache();
         injectEmployeeManagerUI();
+    }
+
+    function buildCompanyCache() {
+        cachedCompanies = [];
+        const groups = $j('.companies_group').not(':last'); // Exclude unassigned
+
+        groups.each(function () {
+            const group = $j(this);
+            group.find('.listing.companies').each(function () {
+                const company = $j(this);
+
+                // Identify company
+                let companyInfo = null;
+                company.find('.area_pic img').each(function () {
+                    const fname = this.src.split('/').pop();
+                    if (companyDefinitions[fname]) {
+                        companyInfo = companyDefinitions[fname];
+                        return false;
+                    }
+                });
+
+                if (companyInfo) {
+                    // Get Resource Bonus (Static per page load)
+                    let mult = 1.0;
+                    const bonusEl = company.find('b.resource_bonus');
+                    const bonusText = bonusEl.text().trim();
+                    if (bonusText && bonusText.includes('%')) {
+                        mult = parseFloat(bonusText.replace('%', '')) / 100;
+                    }
+
+                    cachedCompanies.push({
+                        element: company,
+                        info: companyInfo,
+                        multiplier: mult
+                    });
+                }
+            });
+        });
+        console.log(`Company Manager: Cached ${cachedCompanies.length} companies.`);
     }
 
     function injectEmployeeManagerUI() {
@@ -340,10 +382,10 @@
             <div style="display:flex; align-items:center; margin-right: 15px;">
                 <label>EMPLOYEES:</label>
             </div>
-            
+
             <div style="display:flex; align-items:center; gap: 5px;">
                 <select id="cm-emp-holding" class="cm-custom-select">${holdingOptions}</select>
-                
+
                 <select id="cm-emp-industry" class="cm-custom-select">
                     <option value="all">All Industries</option>
                     <option value="food">Food</option>
@@ -370,7 +412,7 @@
                 <input type="number" id="cm-amount-input" min="0" max="100" value="1" title="Number of employees to assign (0 to unassign)">
 
                 <button id="cm-assign-btn" class="std_global_btn smallSize blueColor" title="Assign Employees">Assign</button>
-                
+
                 <span id="cm-productivity-display" style="margin-left: 10px; font-weight: bold; color: #555; font-size: 11px;"></span>
             </div>
             <div id="cm-production-recap" style="width: 100%; margin-top: 8px; font-size: 11px; color: #666; font-style: italic; border-top: 1px dashed #ddd; padding-top: 5px; display:none;">
@@ -392,12 +434,17 @@
         });
 
         const inputs = ui.find('select');
-        inputs.change(updateStats);
+        inputs.click(function (e) { e.stopPropagation(); }); // Prevent freeze from bubbling
+        inputs.change(function () {
+            clearTimeout(updateStatsTimeout);
+            updateStatsTimeout = setTimeout(updateStats, 50);
+        });
 
         // Listen for manual (or scripted) changes to assignments
         $j('.listing_holder').on('click', '.employees_selector a', function () {
             // Small delay to allow class update to propagate
-            setTimeout(updateStats, 50);
+            clearTimeout(updateStatsTimeout);
+            updateStatsTimeout = setTimeout(updateStats, 50);
         });
 
         // Also update immediately
@@ -407,7 +454,6 @@
             const holdingId = $j('#cm-emp-holding').val();
             const industry = $j('#cm-emp-industry').val();
             const quality = $j('#cm-emp-quality').val();
-            // Amount input is irrelevant for CURRENT production status
 
             // Productivity Display
             const prodSpan = $j('#cm-productivity-display');
@@ -436,73 +482,33 @@
             }
 
             // Production Recap (Current Active Assignments)
-            // User request: "Stats should not be filtered... calculate for all assigned employees across all holdings"
             const recapDiv = $j('#cm-production-recap');
-
-            let companies = $j('.companies_group').not(':last');
-            // Previous: if (holdingId !== 'all') companies = $j(`#${holdingId}`);
-            // Fix: Always iterate all groupings to get global production
-
             let units = {};
-            let hasAssignments = false;
 
-            companies.each(function () {
-                const group = $j(this);
-                // const groupId = group.attr('id'); // Unused with extraction change
+            // Use Cached Companies
+            // Filter logic matches the user requirement: "Calculate for all assigned employees"
+            // But we can respect the filter if we wanted to only show stats for what's filtered?
+            // The previous code had the filter check commented out with "Filter check REMOVED".
+            // So we iterate ALL cached companies.
 
-                group.find('.listing.companies').each(function () {
-                    const company = $j(this);
+            for (const item of cachedCompanies) {
+                const { element, info, multiplier } = item;
 
-                    // Identify company
-                    let companyInfo = null;
-                    company.find('.area_pic img').each(function () {
-                        const fname = this.src.split('/').pop();
-                        if (companyDefinitions[fname]) {
-                            companyInfo = companyDefinitions[fname];
-                            return false;
-                        }
-                    });
+                // Check for current assignment (Dynamic)
+                // We must check the DOM for the 'active' class
+                const activeBtn = element.find('.employees_selector a.active, .employees_selector a.employee_works_active').last();
 
-                    if (!companyInfo) return;
-
-                    // Filter check REMOVED
-                    // "It should always reflect the production of all the assigned employees"
-                    // if (industry !== 'all' && companyInfo.industry !== industry) return;
-                    // if (quality !== 'all' && companyInfo.quality !== quality) return;
-
-                    // Find CURRENTLY ASSIGNED employees
-                    // Look for active class
-                    const activeBtn = company.find('.employees_selector a.active, .employees_selector a.employee_works_active').last();
-
-                    if (activeBtn.length === 0) return; // No workers assigned
-
+                if (activeBtn.length > 0) {
                     const assigned = parseInt(activeBtn.attr('employee')) || 0;
-                    if (assigned <= 0) return;
+                    if (assigned > 0) {
+                        const produced = assigned * (info.baseProduction || 0) * multiplier;
 
-                    hasAssignments = true;
-
-                    // Get Productivity Multiplier
-                    let mult = 1.0;
-
-                    // User says: "productivity for each company in the b tag with the class resource_bonus"
-                    const bonusEl = company.find('b.resource_bonus');
-                    const bonusText = bonusEl.text().trim();
-
-                    if (bonusText && bonusText.includes('%')) {
-                        // Format is like "195.99%" or "100%"
-                        // "100%" -> 1.0 multiplier
-                        // "195.99%" -> 1.9599 multiplier
-                        mult = parseFloat(bonusText.replace('%', '')) / 100;
+                        const unitKey = `${info.industry.replace('_raw', ' Raw')} ${info.quality.toUpperCase()}`;
+                        if (!units[unitKey]) units[unitKey] = 0;
+                        units[unitKey] += produced;
                     }
-
-                    // Add to sum
-                    const produced = assigned * (companyInfo.baseProduction || 0) * mult;
-
-                    const unitKey = `${companyInfo.industry.replace('_raw', ' Raw')} ${companyInfo.quality.toUpperCase()}`;
-                    if (!units[unitKey]) units[unitKey] = 0;
-                    units[unitKey] += produced;
-                });
-            });
+                }
+            }
 
             if (Object.keys(units).length > 0) {
                 const parts = [];
@@ -588,8 +594,8 @@
                             // Deduct from pool
                             remainingToAssign -= toAssign;
                         } else {
-                            // Fallback: if we can't find the button (e.g. limit mismatch), 
-                            // we check if we can assign at least something? 
+                            // Fallback: if we can't find the button (e.g. limit mismatch),
+                            // we check if we can assign at least something?
                             // User requirement implies "fill up", but we only have precise buttons.
                             // If toAssign is 7, and limit is 10, we click 7.
                             // If toAssign is 10, and limit is 10, we click 10.
