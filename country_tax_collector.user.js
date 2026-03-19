@@ -3,6 +3,8 @@
 // @version      0.1
 // @description  Aggregate and breakdown daily tax revenue collected from other countries
 // @author       Curlybear
+// @updateURL		https://curlybear.eu/erep/countrytaxcollector.user.js
+// @downloadURL		https://curlybear.eu/erep/countrytaxcollector.user.js
 // @match        https://www.erepublik.com/*/country/economy/*
 // @grant        none
 // @noframes
