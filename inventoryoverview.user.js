@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         eRepublik Inventory Overview
 // @author       Curlybear
-// @version      2.2
+// @version      2.3
 // @description  Display a customizable inventory overview
 // @updateURL    https://curlybear.eu/erep/inventoryoverview.user.js
 // @downloadURL  https://curlybear.eu/erep/inventoryoverview.user.js
@@ -26,7 +26,6 @@
         blueprints: true,
         inProduction: true,
         width: 330,
-        theme: 'dark',
         anchor: 'left',
         totalStorage: 1000000
     };
@@ -62,51 +61,73 @@
     const createStyles = () => {
         const style = document.createElement('style');
         style.textContent = `
-            /* Global scrollbar styles */
-            ::-webkit-scrollbar {
-                width: 8px;
-            }
-            ::-webkit-scrollbar-track {
-                background: rgba(255, 255, 255, 0.1);
-            }
-            ::-webkit-scrollbar-thumb {
-                background-color: rgba(255, 255, 255, 0.3);
-                border-radius: 4px;
-            }
-            ::-webkit-scrollbar-thumb:hover {
-                background-color: rgba(255, 255, 255, 0.5);
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
+
+            :root {
+                --surface: #121416;
+                --surface-container-lowest: rgba(12, 14, 16, 0.85);
+                --surface-container-low: rgba(26, 28, 30, 0.85);
+                --surface-container: #282a2c;
+                --surface-container-highest: #333537;
+                --surface-bright: #38393c;
+                --primary: #fabd00;
+                --on-primary-container: #c09000;
+                --on-primary-fixed: #261a00;
+                --on-surface: #ffffff;
+                --on-surface-variant: #c6c5d4;
+                --outline-variant: rgba(69, 70, 82, 0.15);
+                --ghost-border: rgba(69, 70, 82, 0.20);
+                --secondary: #b4cad6;
+                --tertiary-container: #00390a;
+                --on-tertiary-container: #48ab4d;
+                --error-container: #93000a;
+                --on-error-container: #ffdad6;
+                --font-display: 'Space Grotesk', sans-serif;
+                --font-body: 'Inter', sans-serif;
             }
 
-            /* Base styles */
-            #inventory-overview, #config-modal {
+            ::-webkit-scrollbar { width: 8px; }
+            ::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); }
+            ::-webkit-scrollbar-thumb { background-color: var(--surface-container-highest); border-radius: 2px; }
+            ::-webkit-scrollbar-thumb:hover { background-color: rgba(69, 70, 82, 0.5); }
+
+            #inventory-overview, #config-modal, #sale-modal, #offers-modal {
                 position: fixed;
-                padding: 10px;
-                border-radius: 5px;
-                font-family: Arial, sans-serif;
+                border-radius: 2px;
+                font-family: var(--font-body);
                 font-size: 12px;
+                color: var(--on-surface);
+                background-color: var(--surface-container-lowest);
+                backdrop-filter: blur(12px);
+                box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), 0 0 10px rgba(250, 189, 0, 0.04);
                 z-index: 9999;
+                display: flex;
+                flex-direction: column;
+                border: 1px solid var(--outline-variant);
             }
 
-            /* Inventory overview specific styles */
-            #inventory-overview {
-                top: 40px;
-                max-height: 80vh;
+            #inventory-overview { top: 40px; }
+            
+            .modal-header {
+                background-color: var(--surface-container-highest);
+                padding: 10px;
+                font-family: var(--font-display);
+                border-bottom: 1px solid var(--outline-variant);
+                margin: 0;
+            }
+            .modal-header h3 { margin: 0; font-size: 14px; font-weight: 500; color: var(--on-surface); }
+
+            .modal-body {
+                padding: 10px;
+                background-color: var(--surface-container-low);
                 overflow-y: auto;
-                width: 330px;
+                flex-grow: 1;
+                max-height: 70vh;
             }
 
-            /* Position classes */
             .left-anchored { left: 10px; }
             .right-anchored { right: 10px; }
 
-            /* Headers */
-            #inventory-overview h3,
-            #config-modal h3 {
-                margin: 0 0 5px 0;
-                font-size: 14px;
-            }
-
-            /* Item list styles */
             #inventory-overview ul {
                 list-style-type: none;
                 padding: 0;
@@ -120,416 +141,127 @@
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                border-radius: 3px;
+                border-radius: 2px;
                 padding: 3px;
                 width: 50px;
+                background-color: transparent;
+                transition: background-color 0.2s;
             }
+            #inventory-overview li:hover { background-color: var(--surface-bright); }
 
             #inventory-overview .category {
-                font-weight: bold;
-                margin-top: 5px;
-                width: 100%;
-            }
-
-            #inventory-overview .item-icon {
-                width: 40px;
-                height: 40px;
-            }
-
-            #inventory-overview .item-amount {
-                font-size: 11px;
-                margin-top: 2px;
-            }
-
-            #inventory-overview .storage-info {
+                font-family: var(--font-display);
+                font-weight: 500;
+                margin-top: 10px;
                 margin-bottom: 5px;
-                font-size: 11px;
+                width: 100%;
+                color: var(--on-surface);
             }
 
-            /* Toggle button positions */
-            #inventory-toggle.left-anchored {
-                left: 10px;
-            }
-            #config-toggle.left-anchored {
-                left: 120px;
-            }
-            #offers-toggle.left-anchored {
-                left: 195px;
-            }
-            #inventory-toggle.right-anchored {
-                right: 80px;
-            }
-            #config-toggle.right-anchored {
-                right: 10px;
-            }
-            #offers-toggle.right-anchored {
-                right: 190px;
-            }
+            #inventory-overview .item-icon { width: 40px; height: 40px; }
+            #inventory-overview .item-amount { font-size: 11px; margin-top: 2px; color: var(--on-surface); }
+            #inventory-overview .storage-info { margin-bottom: 5px; font-size: 11px; color: var(--on-surface-variant); }
 
-            /* Toggle buttons */
-            #inventory-toggle,
-            #config-toggle,
-            #offers-toggle {
+            #inventory-toggle.left-anchored { left: 10px; }
+            #config-toggle.left-anchored { left: 120px; }
+            #offers-toggle.left-anchored { left: 195px; }
+            #inventory-toggle.right-anchored { right: 80px; }
+            #config-toggle.right-anchored { right: 10px; }
+            #offers-toggle.right-anchored { right: 190px; }
+
+            #inventory-toggle, #config-toggle, #offers-toggle {
                 position: fixed;
-                padding: 5px;
-                border-radius: 3px;
-                cursor: pointer;
                 z-index: 10000;
                 top: 10px;
                 user-select: none;
             }
 
-            /* Config modal styles */
-            #config-modal {
-                left: 50%;
-                top: 50%;
-                transform: translate(-50%, -50%);
-                width: 300px;
-                max-height: 80vh;
-                overflow-y: auto;
-                display: none;
-            }
-
-            #config-modal label {
-                display: block;
-                margin-bottom: 5px;
-            }
-
-            #config-modal input[type="checkbox"],
-            #config-modal input[type="radio"] {
-                margin-right: 5px;
-            }
-
-            #config-modal input[type="range"] {
-                width: 100%;
-                margin: 10px 0;
-            }
-
-            #config-modal button {
-                margin-top: 10px;
-                padding: 5px 10px;
+            .btn-primary {
+                background: linear-gradient(135deg, var(--primary), var(--on-primary-container));
+                color: var(--on-primary-fixed);
                 border: none;
+                border-radius: 2px;
+                padding: 6px 12px;
+                font-family: var(--font-body);
+                font-weight: 600;
                 cursor: pointer;
-                border-radius: 3px;
+                transition: opacity 0.2s;
             }
+            .btn-primary:hover { opacity: 0.9; }
 
-            #width-value {
-                display: inline-block;
-                width: 40px;
-                text-align: right;
+            .btn-secondary {
+                background: var(--surface-container-highest);
+                color: var(--on-surface);
+                border: 1px solid var(--ghost-border);
+                border-radius: 2px;
+                padding: 6px 12px;
+                font-family: var(--font-body);
+                cursor: pointer;
+                transition: border-color 0.2s;
             }
+            .btn-secondary:hover { border-color: rgba(69, 70, 82, 1); }
 
-            /* Dark Theme */
-            .dark-theme {
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
+            .btn-tertiary {
+                background: transparent;
+                color: var(--secondary);
+                border: none;
+                padding: 6px 12px;
+                font-family: var(--font-body);
+                cursor: pointer;
             }
+            .btn-tertiary:hover { color: var(--on-surface); }
 
-            #inventory-overview.dark-theme {
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
-            }
-
-            #inventory-overview.dark-theme h3,
-            #config-modal.dark-theme h3 {
-                color: white;
-            }
-
-            #inventory-overview.dark-theme li {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-
-            #inventory-overview.dark-theme::-webkit-scrollbar-track,
-            #config-modal.dark-theme::-webkit-scrollbar-track {
-                background: rgba(255, 255, 255, 0.1);
-            }
-
-            #inventory-overview.dark-theme::-webkit-scrollbar-thumb,
-            #config-modal.dark-theme::-webkit-scrollbar-thumb {
-                background-color: rgba(255, 255, 255, 0.3);
-            }
-
-            #inventory-overview.dark-theme::-webkit-scrollbar-thumb:hover,
-            #config-modal.dark-theme::-webkit-scrollbar-thumb:hover {
-                background-color: rgba(255, 255, 255, 0.5);
-            }
-
-            #inventory-toggle.dark-theme,
-            #config-toggle.dark-theme,
-            #offers-toggle.dark-theme {
-                background-color: rgba(0, 0, 0, 0.8);
-                color: white;
-            }
-
-            #config-modal.dark-theme {
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
-            }
-
-            #config-modal.dark-theme button {
-                background-color: rgba(255, 255, 255, 0.2);
-                color: white;
-            }
-
-            #config-modal.dark-theme button:hover {
-                background-color: rgba(255, 255, 255, 0.3);
-            }
-
-            /* Light Theme */
-            .light-theme {
-                background-color: rgba(255, 255, 255, 0.9);
-                color: black;
-            }
-
-            #inventory-overview.light-theme {
-                background-color: rgba(255, 255, 255, 0.9);
-                color: black;
-            }
-
-            #inventory-overview.light-theme li {
-                background-color: rgba(0, 0, 0, 0.1);
-            }
-
-            #inventory-overview.light-theme::-webkit-scrollbar-track,
-            #config-modal.light-theme::-webkit-scrollbar-track {
-                background: rgba(0, 0, 0, 0.1);
-            }
-
-            #inventory-overview.light-theme::-webkit-scrollbar-thumb,
-            #config-modal.light-theme::-webkit-scrollbar-thumb {
-                background-color: rgba(0, 0, 0, 0.3);
-            }
-
-            #inventory-overview.light-theme::-webkit-scrollbar-thumb:hover,
-            #config-modal.light-theme::-webkit-scrollbar-thumb:hover {
-                background-color: rgba(0, 0, 0, 0.5);
-            }
-
-            #inventory-toggle.light-theme,
-            #config-toggle.light-theme {
-                background-color: rgba(255, 255, 255, 0.9);
-                color: black;
-            }
-
-            #config-modal.light-theme {
-                background-color: rgba(255, 255, 255, 0.9);
-                color: black;
-            }
-
-            #config-modal.light-theme button {
-                background-color: rgba(0, 0, 0, 0.1);
-                color: black;
-            }
-
-            #config-modal.light-theme button:hover {
-                background-color: rgba(0, 0, 0, 0.2);
-            }
-
-            /* Sale modal styles */
-            #sale-modal {
-                position: fixed;
-                top: 0;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
-                padding: 10px;
-                z-index: 9800;
-                width: 450px;
-                font-family: Arial, sans-serif;
-                box-shadow: 0px 0px 20px rgba(0, 0, 0, 0.7);
-                opacity: 0;
-                transition: transform 0.3s ease, opacity 0.3s ease;
-            }
-
-            #sale-modal.left-anchored {
-                left: 0;
-                transform: translateX(-100%);
-                border-radius: 0px 10px 10px 0px;
-            }
-
-            #sale-modal.right-anchored {
-                right: 0;
-                transform: translateX(100%);
-                border-radius: 10px 0px 0px 10px;
-            }
-
-            #sale-modal.visible.left-anchored {
-                transform: translateX(-1%);
-                opacity: 1;
-            }
-
-            #sale-modal.visible.right-anchored {
-                transform: translateX(1%);
-                opacity: 1;
-            }
-
-            #sale-modal.dark-theme {
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
-            }
-
-            #sale-modal.light-theme {
-                background-color: rgba(255, 255, 255, 0.9);
-                color: black;
-                font-size: 14px;
-            }
-
-            #sale-modal.dark-theme h3 {
-                color: white;
-                font-size: 14px;
-            }
-
-            #sale-modal.light-theme h3 {
-                color: black;
-                font-size: 14px;
-            }
-
-            /* offers modal styles */
-            #offers-modal {
-                position: fixed;
-                top: 0;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
-                padding: 10px;
-                z-index: 9800;
-                width: 450px;
-                font-family: Arial, sans-serif;
-                box-shadow: 0px 0px 20px rgba(0, 0, 0, 0.7);
-                opacity: 0;
-                transition: transform 0.3s ease, opacity 0.3s ease;
-                max-height: 80vh;
-                overflow-y: auto;
-            }
-
-            #offers-modal.left-anchored {
-                left: 0;
-                transform: translateX(-100%);
-                border-radius: 0px 10px 10px 0px;
-            }
-
-            #offers-modal.right-anchored {
-                right: 0;
-                transform: translateX(100%);
-                border-radius: 10px 0px 0px 10px;
-            }
-
-            #offers-modal.visible.left-anchored {
-                transform: translateX(-1%);
-                opacity: 1;
-            }
-
-            #offers-modal.visible.right-anchored {
-                transform: translateX(1%);
-                opacity: 1;
-            }
-
-            #offers-modal.dark-theme {
-                background-color: rgba(0, 0, 0, 0.9);
-                color: white;
-            }
-
-            #offers-modal.light-theme {
-                background-color: rgba(255, 255, 255, 0.9);
-                color: black;
-                font-size: 14px;
-            }
-
-            #offers-modal.dark-theme h3 {
-                color: white;
-                font-size: 14px;
-            }
-
-            #offers-modal.light-theme h3 {
-                color: black;
-                font-size: 14px;
-            }
-
-            /* House expiration indicators */
-            .house-expiring-soon {
-                border: 1px solid orange;
-                padding: 2px;
-            }
-            .house-expiring-very-soon {
-                border: 1px solid red;
-                padding: 2px;
-            }
-
-            /* Offers */
-            .offer {
-                display:flex;
-                align-items: center;
-                background-color: rgba(255, 255, 255, 0.1);
-                margin-bottom: 5px;
-                border-radius: 5px;
-                padding: 2px;
-            }
-            .offer * {
-                display:flex;
-            }
-            .offer-images {
-                display: flex;
-                align-items: center;
-                padding-right: 5px;
-            }
-            .offer-images img {
-                width: 25px;
-            }
-            .offer-details {
-                width: 100%;
-            }
-            .offer-details * {
-                padding: 2px;
-            }
-            .offer-buttons {
-                align-items: flex-end;
-                flex-direction: column;
-            }
-            .offer-totals {
-                justify-content: flex-end;
+            #config-modal { width: 300px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+            #config-modal label { display: flex; align-items: center; margin-bottom: 5px; color: var(--on-surface); gap: 5px; }
+            #config-modal input[type="range"] { width: 100%; margin: 10px 0; }
+            #config-modal input[type="number"], #config-modal input[type="text"],
+            #sale-modal input[type="number"] {
+                background: var(--surface-container-highest);
+                border: none;
+                border-bottom: 2px solid transparent;
+                color: var(--on-surface);
                 padding: 5px;
-                width: 100%;
-                text-align: right;
+                border-radius: 2px;
             }
-            .offer-remove, .offer-link {
-                cursor: pointer;
-                user-select: none;
+            #config-modal input[type="number"]:focus, #config-modal input[type="text"]:focus,
+            #sale-modal input[type="number"]:focus {
+                border-bottom: 2px solid var(--primary);
+                outline: none;
             }
-            .offer-amount {
-                width: 20%;
-                align-items: center;
-            }
+            #width-value { display: inline-block; width: 40px; text-align: right; }
 
-            /* Toast Notifications */
-            #toast-container {
-                position: fixed;
-                bottom: 20px;
-                right: 20px;
-                z-index: 10001;
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-            }
+            #sale-modal, #offers-modal { width: 450px; opacity: 0; transition: transform 0.3s ease, opacity 0.3s ease; }
+            #sale-modal.left-anchored, #offers-modal.left-anchored { left: 0; transform: translateX(-100%); }
+            #sale-modal.right-anchored, #offers-modal.right-anchored { right: 0; transform: translateX(100%); }
+            #sale-modal.visible.left-anchored, #offers-modal.visible.left-anchored { transform: translateX(-1%); opacity: 1; }
+            #sale-modal.visible.right-anchored, #offers-modal.visible.right-anchored { transform: translateX(1%); opacity: 1; }
 
-            .toast {
-                padding: 12px 20px;
-                border-radius: 4px;
-                color: white;
-                font-size: 14px;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                opacity: 0;
-                transform: translateY(20px);
-                transition: opacity 0.3s, transform 0.3s;
-                min-width: 200px;
-                max-width: 400px;
+            .house-expiring-soon { border: 1px solid var(--primary); }
+            @keyframes pulse-animation {
+                0% { box-shadow: 0 0 0 0 rgba(250, 189, 0, 0.4); }
+                70% { box-shadow: 0 0 0 6px rgba(250, 189, 0, 0); }
+                100% { box-shadow: 0 0 0 0 rgba(250, 189, 0, 0); }
             }
+            .house-expiring-very-soon { border: 1px solid var(--primary); animation: pulse-animation 2s infinite; }
 
-            .toast.visible {
-                opacity: 1;
-                transform: translateY(0);
-            }
+            .offer { display: flex; align-items: center; margin-bottom: 5px; padding: 2px; background-color: transparent; transition: background-color 0.2s; }
+            .offer:hover { background-color: var(--surface-bright); }
+            .offer * { display: flex; }
+            .offer-images { align-items: center; padding-right: 5px; }
+            .offer-images img { width: 25px; }
+            .offer-details { width: 100%; color: var(--on-surface); }
+            .offer-details * { padding: 2px; }
+            .offer-buttons { align-items: flex-end; flex-direction: column; }
+            .offer-totals { justify-content: flex-end; padding: 5px; width: 100%; text-align: right; font-family: var(--font-display); }
+            .offer-remove, .offer-link { cursor: pointer; user-select: none; }
+            .offer-amount { width: 20%; align-items: center; }
 
-            .toast.success { background-color: #4caf50; }
-            .toast.error { background-color: #f44336; }
-            .toast.info { background-color: #2196f3; }
+            #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 10001; display: flex; flex-direction: column; gap: 10px; }
+            .toast { padding: 12px 20px; border-radius: 2px; color: var(--on-surface); font-size: 14px; font-family: var(--font-body); opacity: 0; transform: translateY(20px); transition: opacity 0.3s, transform 0.3s; min-width: 200px; max-width: 400px; }
+            .toast.visible { opacity: 1; transform: translateY(0); }
+            .toast.success { background-color: var(--tertiary-container); color: var(--on-tertiary-container); }
+            .toast.error { background-color: var(--error-container); color: var(--on-error-container); }
+            .toast.info { background-color: var(--surface-container-high); color: var(--secondary); }
         `;
         document.head.appendChild(style);
     };
@@ -613,16 +345,6 @@
     };
 
     // UI Management
-    const setTheme = (theme) => {
-        const elements = [inventoryOverview, configModal, toggleButton, configToggle, saleModal, offersModal, offersToggle];
-        elements.forEach(el => {
-            if (el) {
-                el.classList.remove('dark-theme', 'light-theme');
-                el.classList.add(`${theme}-theme`);
-            }
-        });
-    };
-
     const setAnchor = (anchor) => {
         const elements = [inventoryOverview, saleModal, offersModal, toggleButton, configToggle, offersToggle];
         elements.forEach(el => {
@@ -762,7 +484,10 @@
         const { inventoryItems, inventoryStatus: status } = data;
 
         let html = `
-            <h3>Inventory Overview</h3>
+            <div class="modal-header">
+                <h3>Inventory Overview</h3>
+            </div>
+            <div class="modal-body">
             <div class="storage-info">Storage: ${status.usedStorage} / ${status.totalStorage} (${status.storagePercentage})</div>
         `;
 
@@ -826,6 +551,7 @@
             addItems(category, items, configKey, filter);
         });
 
+        html += '</div>';
         inventoryOverview.innerHTML = html;
     };
 
@@ -971,7 +697,7 @@
 
             const data = await response.json();
             if (!data.error) {
-                saleModal.style.display = 'none';
+                hideSaleModal();
                 updateInventoryOverview();
                 updateOffersOverview();
                 showToast('Item listed successfully', 'success');
@@ -1003,7 +729,6 @@
 
             const data = await response.json();
             if (!data.error) {
-                saleModal.style.display = 'none';
                 updateOffersOverview();
                 showToast('Offer deleted successfully', 'success');
             } else {
@@ -1021,12 +746,14 @@
         toggleButton = document.createElement('div');
         toggleButton.id = 'inventory-toggle';
         toggleButton.textContent = 'Toggle Inventory';
+        toggleButton.className = 'btn-secondary';
         document.body.appendChild(toggleButton);
 
         // Create config toggle button
         configToggle = document.createElement('div');
         configToggle.id = 'config-toggle';
         configToggle.textContent = 'Configure';
+        configToggle.className = 'btn-secondary';
         document.body.appendChild(configToggle);
 
         // Create inventory overview container
@@ -1039,7 +766,10 @@
         configModal.id = 'config-modal';
         configModal.style.display = "none";
         configModal.innerHTML = `
-            <h3>Configure Inventory Display</h3>
+            <div class="modal-header">
+                <h3>Configure Inventory Display</h3>
+            </div>
+            <div class="modal-body">
             <label><input type="checkbox" id="config-currencies" checked> Currencies</label>
             <label><input type="checkbox" id="config-active-enhancements" checked> Active Enhancements</label>
             <label><input type="checkbox" id="config-boosters" checked> Boosters</label>
@@ -1055,13 +785,14 @@
                 Total Storage:
                 <input type="number" id="config-total-storage" min="1000" step="1000" value="1000000" style="width: 100px;">
             </label>
-            <label><input type="checkbox" id="config-theme"> Use Light Theme</label>
+            
             <div>
                 Position:
                 <label><input type="radio" name="anchor" id="config-anchor-left" value="left"> Left</label>
                 <label><input type="radio" name="anchor" id="config-anchor-right" value="right"> Right</label>
             </div>
-            <button id="config-save">Save Configuration</button>
+            <button id="config-save" class="btn-primary" style="margin-top: 15px; width: 100%;">Save Configuration</button>
+            </div>
         `;
         document.body.appendChild(configModal);
 
@@ -1069,7 +800,10 @@
         saleModal = document.createElement('div');
         saleModal.id = 'sale-modal';
         saleModal.innerHTML = `
-            <h3 style="margin-bottom: 10px;">Add offer for Item</h3>
+            <div class="modal-header">
+                <h3>Add offer for Item</h3>
+            </div>
+            <div class="modal-body">
             <div style="display: flex; justify-content: center; align-items: center;">
                 <img id="sale-item-image" src="" alt="Item Image"
                      style="width: 50px; height: 50px; margin: 10px; border-radius: 8px; background-color: rgba(255,255,255,0.1);">
@@ -1083,24 +817,19 @@
                     Price:
                     <input type="number" id="sale-price"
                            placeholder="Enter price"
-                           style="flex: 1; margin-left: 10px; padding: 5px; border: 1px solid #555; border-radius: 4px;">
+                           style="flex: 1; margin-left: 10px;">
                 </label>
                 <label style="display: flex; justify-content: space-between; align-items: center;">
                     Quantity:
                     <input type="number" id="sale-quantity"
                            min="1" placeholder="Enter quantity"
-                           style="flex: 1; margin-left: 10px; padding: 5px; border: 1px solid #555; border-radius: 4px;">
+                           style="flex: 1; margin-left: 10px;">
                 </label>
             </div>
             <div style="margin-top: 15px; display: flex; justify-content: space-around;">
-                <button id="sale-submit"
-                        style="padding: 8px 15px; background-color: #4caf50; color: white; border: none; border-radius: 5px; cursor: pointer;">
-                    Add offer
-                </button>
-                <button id="sale-cancel"
-                        style="padding: 8px 15px; background-color: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer;">
-                    Cancel
-                </button>
+                <button id="sale-submit" class="btn-primary">Add offer</button>
+                <button id="sale-cancel" class="btn-secondary">Cancel</button>
+            </div>
             </div>
         `;
         document.body.appendChild(saleModal);
@@ -1109,15 +838,20 @@
         offersToggle = document.createElement('div');
         offersToggle.id = 'offers-toggle';
         offersToggle.textContent = 'Show market offers';
-        offersToggle.classList.add('isClosed');
+        offersToggle.className = 'btn-secondary isClosed';
+
         document.body.appendChild(offersToggle);
 
         // Create offers modal
         offersModal = document.createElement('div');
         offersModal.id = 'offers-modal';
         offersModal.innerHTML = `
-            <h3 style="margin-bottom: 10px;">Market Offers</h3>
-            <div id='offers-modal-content' style="display: flex; flex-direction: column; gap: 10px; text-align: left;"></div>
+            <div class="modal-header">
+                <h3>Market Offers</h3>
+            </div>
+            <div class="modal-body">
+                <div id='offers-modal-content' style="display: flex; flex-direction: column; gap: 10px; text-align: left;"></div>
+            </div>
         `;
         document.body.appendChild(offersModal);
     };
@@ -1160,7 +894,7 @@
         }
 
         // Initialize theme
-        document.getElementById('config-theme').checked = config.theme === 'light';
+
 
         // Initialize anchor position
         document.getElementById(`config-anchor-${config.anchor}`).checked = true;
@@ -1215,25 +949,25 @@
                 blueprints: document.getElementById('config-blueprints').checked,
                 inProduction: document.getElementById('config-in-production').checked,
                 width: parseInt(widthSlider.value),
-                theme: document.getElementById('config-theme').checked ? 'light' : 'dark',
+
                 anchor: document.querySelector('input[name="anchor"]:checked').value,
                 totalStorage: parseInt(document.getElementById('config-total-storage').value) || 1000000
             };
 
             configManager.save(config);
             configModal.style.display = 'none';
-            setTheme(config.theme);
+
             setAnchor(config.anchor);
             inventoryOverview.style.width = `${config.width}px`;
 
             // Apply theme to toggle buttons
-            toggleButton.classList.add(`${config.theme}-theme`);
-            configToggle.classList.add(`${config.theme}-theme`);
+
+
             updateInventoryOverview();
         });
 
         // Set initial state
-        setTheme(config.theme);
+
         setAnchor(config.anchor);
         updateInventoryOverview();
 

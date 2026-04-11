@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         BattleTracker
-// @version      0.6
+// @version      0.7
 // @description  Track battles from anywhere
 // @author       Curlybear
 // @updateURL		https://curlybear.eu/erep/battletracker.user.js
@@ -646,10 +646,12 @@
 
     const battletracker = document.getElementById("battletracker");
     jQuery(battletracker).append("<div id='battletracker_setting_btn'>⚙️</div>")
-    jQuery("body").append("<div id='battletracker_setting_modal' class='modal'><div class='close' id='battletracker_setting_closebtn'>✖</div></div>")
-    jQuery("#battletracker_setting_modal").append("<div class='searchregionbar'><select id='battletracker_setting_comboBoxRegions'></select><button id='battletracker_setting_RegionsAdd'>Track region</button></div>")
-    jQuery("#battletracker_setting_modal").append("<div class='trackedregionscontainer'><span class='battletracker_setting_title'>Currently tracked regions</span><ul id='battletracker_setting_tracked_regions_list'></ul></div>")
-    jQuery("#battletracker_setting_modal").append("<div class='autotrackbar' style='margin-top: 15px;'><label style='color: white; text-shadow: 1px 1px #3f3f3f;'><input type='checkbox' id='battletracker_setting_autotrack' " + (battletracker_autotrack_fought === "true" ? "checked" : "") + "> Auto-track battles fought in</label></div>")
+    jQuery("body").append("<div id='battletracker_setting_modal' class='modal'>" +
+        "<div class='modal-header'><h3>Battle Tracker Settings</h3><div class='close' id='battletracker_setting_closebtn'>✖</div></div>" +
+        "<div class='modal-body'></div></div>")
+    jQuery("#battletracker_setting_modal .modal-body").append("<div class='searchregionbar'><select id='battletracker_setting_comboBoxRegions'></select><button class='btn-primary' id='battletracker_setting_RegionsAdd' style='margin-left: 10px;'>Track region</button></div>")
+    jQuery("#battletracker_setting_modal .modal-body").append("<div class='trackedregionscontainer'><span class='battletracker_setting_title'>Currently tracked regions</span><ul id='battletracker_setting_tracked_regions_list'></ul></div>")
+    jQuery("#battletracker_setting_modal .modal-body").append("<div class='autotrackbar' style='margin-top: 15px;'><label><input type='checkbox' id='battletracker_setting_autotrack' " + (battletracker_autotrack_fought === "true" ? "checked" : "") + "> Auto-track battles fought in</label></div>")
 
     jQuery("#battletracker_setting_autotrack").change(function () {
         localStorage.setItem("battletracker_autotrack_fought", this.checked ? "true" : "false");
@@ -706,7 +708,7 @@
     });
 
     // Add table and battles
-    jQuery("#battletracker").append("<table id='battletrackertable'></table>");
+    jQuery("#battletracker").append("<table id='battletrackertable' style='width: stretch'></table>");
     jQuery("#battletrackertable").append("<tr class='headers'></tr>");
     jQuery("#battletrackertable tr:last").append("<td class='battletracker_header'>Region</td>");
     jQuery("#battletrackertable tr:last").append("<td class='battletracker_header'>D1</td>");
@@ -948,11 +950,37 @@
     }
 
     addGlobalStyle(`
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
+
+            :root {
+                --surface: #121416;
+                --surface-container-lowest: rgba(12, 14, 16, 0.85);
+                --surface-container-low: rgba(26, 28, 30, 0.85);
+                --surface-container: #282a2c;
+                --surface-container-highest: #333537;
+                --surface-bright: #38393c;
+                --primary: #fabd00;
+                --on-primary-container: #c09000;
+                --on-primary-fixed: #261a00;
+                --on-surface: #ffffff;
+                --on-surface-variant: #c6c5d4;
+                --outline-variant: rgba(69, 70, 82, 0.15);
+                --ghost-border: rgba(69, 70, 82, 0.20);
+                --tertiary-container: #00390a;
+                --on-tertiary-container: #48ab4d;
+                --error-container: #93000a;
+                --on-error-container: #ffdad6;
+                --font-display: 'Space Grotesk', sans-serif;
+                --font-body: 'Inter', sans-serif;
+            }
+
 #battletracker {
+  font-family: var(--font-body);
+  color: var(--on-surface);
   width: 370px;
-  background-image: radial-gradient(circle, #8c8c8c, #6b6b6b);;
-  border-radius: 10px;
-  border: 1px solid #6b6b6b;
+  background-color: var(--surface-container-lowest);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--outline-variant);
   position: absolute;
   top: 50px;
   left: 50px;
@@ -961,13 +989,9 @@
   padding-left: 10px;
   padding-right: 10px;
   z-index: 10000000;
-  box-shadow: 0 1px 7.3px 5.7px rgb(34 31 31 / 14%);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), 0 0 10px rgba(250, 189, 0, 0.04);
   overflow: hidden;
-}
-
-#battletracker > * {
-  color: white;
-  text-shadow: 1px 1px #3f3f3f;
+  font-size: 12px;
 }
 
 #battletracker_setting_btn, #battletracker_setting_closebtn {
@@ -976,20 +1000,28 @@
   top: 0px;
   font-size: large;
   cursor: pointer;
+  z-index: 2;
+  color: var(--on-surface-variant);
+}
+
+#battletracker_setting_btn:hover, #battletracker_setting_closebtn:hover {
+  color: var(--on-surface);
 }
 
 #battletracker_setting_closebtn {
-  top: -28px;
+  top: 10px;
+  right: 15px;
 }
 
 .battletracker_header {
   padding-top: 3px;
   padding-bottom: 3px;
   font-weight: 800;
+  font-family: var(--font-display);
 }
 
 .battletracker_row_fought {
-    background-image: radial-gradient(circle, #ffffff, #00000000);
+    background-color: var(--surface-bright);
     font-weight: 700;
 }
 
@@ -1005,7 +1037,8 @@
 }
 
 .battletracker_remove:hover {
-  color: darkred;
+  color: var(--error-container);
+  cursor: pointer;
 }
 
 .battletracker_time {
@@ -1016,81 +1049,129 @@
   display: block;
   height: 16px;
   width: 23px;
-  border: 5px #9f9f9f solid;
-  border-radius: 8px;
+  border-radius: 2px;
 }
 
-
-
 .medal_win{
-  border: 5px green solid;
+  border: 2px var(--on-tertiary-container) solid;
 }
 
 .medal_lose{
-  border: 5px red solid;
+  border: 2px var(--error-container) solid;
 }
 
 .modal {
-  display: none; /* Hidden by default */
-  z-index: 10000001; /* Sit on top */
-  background-color: rgb(0,0,0); /* Fallback color */
-  background-image: radial-gradient(circle, #8c8c8c, #6b6b6b);
-  width: 25%;
-  border-radius: 10px;
-  border: 1px solid #6b6b6b;
-  border-top: 30px solid black;
+  display: none;
+  z-index: 10000001;
+  background-color: var(--surface-container-lowest);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), 0 0 10px rgba(250, 189, 0, 0.04);
+  width: 400px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 2px;
   position: absolute;
-  top: 50%; /* Set the top to 50% */
-  left: 50%; /* Set the left to 50% */
+  top: 50%;
+  left: 50%;
   text-align: center;
-  transform: translate(-50%, -50%); /* Translate the div to the center */
+  transform: translate(-50%, -50%);
+  font-family: var(--font-body);
+  color: var(--on-surface);
 }
 
-  /* Modal Content */
-  .modal-content {
-    background-color: #fefefe;
-    margin: 15% auto; /* 15% from the top and centered */
-    padding: 20px;
-    border: 1px solid #888;
-    width: 80%; /* Could be more or less, depending on screen size */
+.modal-header {
+  background-color: var(--surface-container-highest);
+  padding: 10px 15px;
+  font-family: var(--font-display);
+  border-bottom: 1px solid var(--outline-variant);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.modal-body {
+  padding: 15px;
+  background-color: var(--surface-container-low);
+  overflow-y: auto;
+  min-height: 100px;
+}
+
+.searchregionbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 15px;
+}
+
+.searchregionbar select {
+  flex: 1;
+  background: var(--surface-container-highest);
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--on-surface);
+  padding: 5px;
+  border-radius: 2px;
+  font-family: var(--font-body);
+}
+
+.searchregionbar select:focus {
+  border-bottom: 2px solid var(--primary);
+  outline: none;
+}
+
+ul#battletracker_setting_tracked_regions_list {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+ul#battletracker_setting_tracked_regions_list li {
+  background-color: var(--surface-bright);
+  padding: 5px 10px;
+  border-radius: 2px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--primary), var(--on-primary-container));
+  color: var(--on-primary-fixed);
+  border: none;
+  border-radius: 2px;
+  padding: 6px 12px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn-primary:hover { opacity: 0.9; }
+
+  .battletracker_setting_title {
+    font-family: var(--font-display);
+    font-size: 13px;
   }
 
-  /* The Close Button */
-  .close {
-    color: #aaa;
-
-    font-size: 28px;
-    font-weight: bold;
-  }
-
-  .close:hover,
-  .close:focus {
-    color: grey;
-    text-decoration: none;
-    cursor: pointer;
-  }
-  .searchregionbar {
-    width: 100%
-  }
-  .battletracker_setting_title{
-    color: white;
-    text-shadow: 1px 1px #3f3f3f;
-  }
   #battletrackerHeader{
     touch-action: none;
-    width:110%;
-    border:none;
-    cursor:move;
-    cursor: -webkit-grab;
-    cursor: -moz-grab;
-    padding:10px 15px;
-    background-color: rgba(233,233,233,.9);
-    display:inline-block;
+    width: 100%;
+    border: none;
+    cursor: move;
+    padding: 10px 15px;
+    background-color: var(--surface-container-highest);
+    display: inline-block;
     position: relative;
     left: -10px;
     top: -2px;
-    height: 28px;
-    background-color: black;
+    height: 10px;
   }
 
   .pulsate {
@@ -1100,15 +1181,9 @@
 }
 
 @keyframes pulsate {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.05);
-  }
-  100% {
-    transform: scale(1);
-  }
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
 }
 `);
 })();
