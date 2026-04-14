@@ -3,12 +3,12 @@
 // @version      0.2
 // @description  High-performance, custom "Company Manager plus" dashboard.
 // @author       Curlybear
-// @match        https://www.erepublik.com/en/economy/custom-manager*
-// @match        https://www.erepublik.com/en/economy/myCompanies
+// @match        https://www.erepublik.com/en*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      erepublik.com
+// @connect      productivityapi.curlybear.eu
 // ==/UserScript==
 
 (function () {
@@ -20,6 +20,583 @@
     const DB_NAME = 'eRepCustomManagerDB';
     const DB_VERSION = 1;
     const CUSTOM_URL = '/en/economy/custom-manager';
+
+    const regionMap = {
+        3: { name: "Dobrogea", permalink: "Dobrogea" },
+        5: { name: "Muntenia", permalink: "Muntenia" },
+        9: { name: "Oltenia", permalink: "Oltenia" },
+        11: { name: "Banat", permalink: "Banat" },
+        35: { name: "Transilvania", permalink: "Transilvania" },
+        36: { name: "Crisana", permalink: "Crisana" },
+        37: { name: "Moldova", permalink: "Moldova" },
+        38: { name: "Maramures", permalink: "Maramures" },
+        39: { name: "Bucovina", permalink: "Bucovina" },
+        40: { name: "Alabama", permalink: "Alabama" },
+        41: { name: "Alaska", permalink: "Alaska" },
+        42: { name: "Arizona", permalink: "Arizona" },
+        43: { name: "Arkansas", permalink: "Arkansas" },
+        44: { name: "California", permalink: "California" },
+        45: { name: "Colorado", permalink: "Colorado" },
+        46: { name: "Connecticut", permalink: "Connecticut" },
+        47: { name: "Delaware", permalink: "Delaware" },
+        48: { name: "Florida", permalink: "Florida" },
+        49: { name: "Georgia", permalink: "Georgia" },
+        50: { name: "Hawaii", permalink: "Hawaii" },
+        51: { name: "Idaho", permalink: "Idaho" },
+        52: { name: "Illinois", permalink: "Illinois" },
+        53: { name: "Indiana", permalink: "Indiana" },
+        54: { name: "Iowa", permalink: "Iowa" },
+        55: { name: "Kansas", permalink: "Kansas" },
+        56: { name: "Kentucky", permalink: "Kentucky" },
+        57: { name: "Louisiana", permalink: "Louisiana" },
+        58: { name: "Maine", permalink: "Maine" },
+        59: { name: "Maryland", permalink: "Maryland" },
+        60: { name: "Massachusetts", permalink: "Massachusetts" },
+        61: { name: "Michigan", permalink: "Michigan" },
+        62: { name: "Minnesota", permalink: "Minnesota" },
+        63: { name: "Mississippi", permalink: "Mississippi" },
+        64: { name: "Missouri", permalink: "Missouri" },
+        65: { name: "Montana", permalink: "Montana" },
+        66: { name: "Nebraska", permalink: "Nebraska" },
+        67: { name: "Nevada", permalink: "Nevada" },
+        68: { name: "New Hampshire", permalink: "New-Hampshire" },
+        69: { name: "New Jersey", permalink: "New-Jersey" },
+        70: { name: "New Mexico", permalink: "New-Mexico" },
+        71: { name: "New York", permalink: "New-York" },
+        72: { name: "North Carolina", permalink: "North-Carolina" },
+        73: { name: "North Dakota", permalink: "North-Dakota" },
+        74: { name: "Ohio", permalink: "Ohio" },
+        75: { name: "Oklahoma", permalink: "Oklahoma" },
+        76: { name: "Oregon", permalink: "Oregon" },
+        77: { name: "Pennsylvania", permalink: "Pennsylvania" },
+        78: { name: "Rhode Island", permalink: "Rhode-Island" },
+        79: { name: "South Carolina", permalink: "South-Carolina" },
+        80: { name: "South Dakota", permalink: "South-Dakota" },
+        81: { name: "Tennessee", permalink: "Tennessee" },
+        82: { name: "Texas", permalink: "Texas" },
+        83: { name: "Utah", permalink: "Utah" },
+        84: { name: "Vermont", permalink: "Vermont" },
+        85: { name: "Virginia", permalink: "Virginia" },
+        86: { name: "Washington", permalink: "Washington" },
+        87: { name: "West Virginia", permalink: "West-Virginia" },
+        88: { name: "Wisconsin", permalink: "Wisconsin" },
+        89: { name: "Wyoming", permalink: "Wyoming" },
+        90: { name: "District of Columbia", permalink: "District-of-Columbia" },
+        91: { name: "Northern Basarabia", permalink: "Northern-Basarabia" },
+        92: { name: "Chisinau", permalink: "Chisinau" },
+        93: { name: "Southern Basarabia", permalink: "Southern-Basarabia" },
+        94: { name: "Transnistria", permalink: "Transnistria" },
+        95: { name: "Ontario", permalink: "Ontario" },
+        96: { name: "Prince Edward Island", permalink: "Prince-Edward-Island" },
+        97: { name: "Alberta", permalink: "Alberta" },
+        98: { name: "New Brunswick", permalink: "New-Brunswick" },
+        99: { name: "Nova Scotia", permalink: "Nova-Scotia" },
+        100: { name: "Quebec", permalink: "Quebec" },
+        101: { name: "Saskatchewan", permalink: "Saskatchewan" },
+        102: { name: "Newfoundland and Labrador", permalink: "Newfoundland" },
+        103: { name: "British Columbia", permalink: "British-Columbia" },
+        104: { name: "Yukon", permalink: "Yukon" },
+        105: { name: "Manitoba", permalink: "Manitoba" },
+        106: { name: "Northwest Territories", permalink: "Northwest-Territories" },
+        107: { name: "Nunavut", permalink: "Nunavut" },
+        108: { name: "Western Transdanubia", permalink: "Western-Transdanubia" },
+        109: { name: "Southern Transdanubia", permalink: "Southern-Transdanubia" },
+        110: { name: "Central Transdanubia", permalink: "Central-Transdanubia" },
+        111: { name: "Central Hungary", permalink: "Central-Hungary" },
+        112: { name: "Northern Hungary", permalink: "Northern-Hungary" },
+        113: { name: "Northern Great Plain", permalink: "Northern-Great-Plain" },
+        114: { name: "Southern Great Plain", permalink: "Southern-Great-Plain" },
+        115: { name: "Valley of Mexico", permalink: "Valley-of-Mexico" },
+        116: { name: "Baja", permalink: "Baja" },
+        117: { name: "Northwest of Mexico", permalink: "Northwest-of-Mexico" },
+        118: { name: "Pacific Coast of Mexico", permalink: "Pacific-Coast-of-Mexico" },
+        119: { name: "Oaxaca", permalink: "Oaxaca" },
+        120: { name: "Gulf of Mexico", permalink: "Gulf-of-Mexico" },
+        121: { name: "Southeast of Mexico", permalink: "Southeast-of-Mexico" },
+        122: { name: "Northeast of Mexico", permalink: "Northeast-of-Mexico" },
+        123: { name: "Venezuelan Andean", permalink: "Venezuelan-Andean" },
+        124: { name: "Venezuelan Capital", permalink: "Venezuelan-Capital" },
+        125: { name: "Central Venezuela", permalink: "Central-Venezuela" },
+        126: { name: "Central Western Venezuela", permalink: "Central-Western-Venezuela" },
+        127: { name: "Guayana", permalink: "Guayana" },
+        129: { name: "Llanos", permalink: "Llanos" },
+        130: { name: "North Eastern Venezuela", permalink: "North-Eastern-Venezuela" },
+        131: { name: "Zulian", permalink: "Zulian" },
+        132: { name: "Subcarpathia", permalink: "Subcarpathia" },
+        133: { name: "Galicia and Lodomeria", permalink: "Galicia-and-Lodomeria" },
+        134: { name: "Volhynia", permalink: "Volhynia" },
+        135: { name: "Polisia", permalink: "Polisia" },
+        136: { name: "Podolia", permalink: "Podolia" },
+        137: { name: "Bukovyna", permalink: "Bukovyna" },
+        138: { name: "Dnipro", permalink: "Dnipro" },
+        139: { name: "Siveria", permalink: "Siveria" },
+        140: { name: "Bassarabia", permalink: "Bassarabia" },
+        141: { name: "Zaporozhia", permalink: "Zaporozhia" },
+        142: { name: "Sloboda", permalink: "Sloboda" },
+        143: { name: "Donbas", permalink: "Donbas" },
+        144: { name: "Taurida", permalink: "Taurida" },
+        146: { name: "Center West of Brazil", permalink: "Center-West-of-Brazil" },
+        147: { name: "North of Brazil", permalink: "North-of-Brazil" },
+        148: { name: "Northeast of Brazil", permalink: "Northeast-of-Brazil" },
+        149: { name: "Southeast of Brazil", permalink: "Southeast-of-Brazil" },
+        150: { name: "Parana and Santa Catarina", permalink: "Parana-and-Santa-Catarina" },
+        151: { name: "Pampas", permalink: "Pampas" },
+        152: { name: "Argentine Northwest", permalink: "Argentine-Northwest" },
+        153: { name: "South East Chaco", permalink: "South-East-Chaco" },
+        154: { name: "Mesopotamia", permalink: "Mesopotamia" },
+        155: { name: "Cuyo", permalink: "Cuyo" },
+        156: { name: "Patagonia", permalink: "Patagonia" },
+        157: { name: "Lisboa", permalink: "Lisboa" },
+        158: { name: "Norte", permalink: "Norte" },
+        159: { name: "Centro", permalink: "Centro" },
+        160: { name: "Alentejo", permalink: "Alentejo" },
+        161: { name: "Algarve", permalink: "Algarve" },
+        162: { name: "Azores", permalink: "Azores" },
+        163: { name: "Madeira", permalink: "Madeira" },
+        166: { name: "Madrid", permalink: "Madrid" },
+        167: { name: "Andalucia", permalink: "Andalucia" },
+        168: { name: "Aragon", permalink: "Aragon" },
+        169: { name: "Asturias", permalink: "Asturias" },
+        170: { name: "Basque Country", permalink: "Basque-Country" },
+        171: { name: "Cantabria", permalink: "Cantabria" },
+        173: { name: "Castilla y Leon", permalink: "Castilla-Leon" },
+        174: { name: "Catalonia", permalink: "Catalonia" },
+        175: { name: "Extremadura", permalink: "Extremadura" },
+        176: { name: "Galicia", permalink: "Galicia-Spain" },
+        177: { name: "Murcia", permalink: "Murcia" },
+        178: { name: "Navarra", permalink: "Navarra" },
+        179: { name: "La Rioja", permalink: "La-Rioja" },
+        180: { name: "Valencian Community", permalink: "Valencian" },
+        181: { name: "Castilla La Mancha", permalink: "Castilla-La-Mancha" },
+        183: { name: "Canary Islands", permalink: "Canary-Islands" },
+        184: { name: "Balearic Islands", permalink: "Balearic-Islands" },
+        185: { name: "Alsace", permalink: "Alsace" },
+        186: { name: "Aquitaine", permalink: "Aquitaine" },
+        187: { name: "Auvergne", permalink: "Auvergne" },
+        188: { name: "Brittany", permalink: "Brittany" },
+        189: { name: "Burgundy", permalink: "Burgundy" },
+        190: { name: "Loire Valley", permalink: "Loire-Valley" },
+        191: { name: "Champagne Ardenne", permalink: "Champagne-Ardenne" },
+        192: { name: "Corsica", permalink: "Corsica" },
+        193: { name: "Franche-comte", permalink: "Franche-comte" },
+        194: { name: "Languedoc Roussillon", permalink: "Languedoc-Roussillon" },
+        195: { name: "Limousin", permalink: "Limousin" },
+        196: { name: "Lorraine", permalink: "Lorraine" },
+        197: { name: "Lower Normandy", permalink: "Lower-Normandy" },
+        198: { name: "Midi-Pyrenees", permalink: "Midi-Pyrenees" },
+        199: { name: "Paris Isle of France", permalink: "Paris-Isle-of-France" },
+        200: { name: "Pays de la Loire", permalink: "Pays-de-la-Loire" },
+        201: { name: "Picardy", permalink: "Picardy" },
+        202: { name: "Poitou Charentes", permalink: "Poitou-Charentes" },
+        203: { name: "Provence Alpes Azur", permalink: "Provence-Alpes-Azur" },
+        204: { name: "Rhone Alps", permalink: "Rhone-Alps" },
+        205: { name: "Upper Normandy", permalink: "Upper-Normandy" },
+        207: { name: "North Calais", permalink: "North-Calais" },
+        208: { name: "Dublin", permalink: "Dublin" },
+        209: { name: "Cork", permalink: "Cork" },
+        210: { name: "Shannon", permalink: "Shannon" },
+        212: { name: "Mayo", permalink: "Mayo" },
+        213: { name: "Wexford", permalink: "Wexford" },
+        215: { name: "Louth", permalink: "Louth" },
+        216: { name: "London", permalink: "London" },
+        217: { name: "Scotland", permalink: "Scotland" },
+        218: { name: "Wales", permalink: "Wales" },
+        219: { name: "Northern Ireland", permalink: "Northern-Ireland" },
+        220: { name: "South East of England", permalink: "South-East-of-England" },
+        221: { name: "South West of England", permalink: "South-West-of-England" },
+        222: { name: "East Midlands", permalink: "East-Midlands" },
+        223: { name: "West Midlands", permalink: "West-Midlands" },
+        224: { name: "East of England", permalink: "East-of-England" },
+        225: { name: "Yorkshire & Humberside", permalink: "Yorkshire-Humberside" },
+        226: { name: "North East of England", permalink: "North-East-of-England" },
+        227: { name: "North West of England", permalink: "North-West-of-England" },
+        228: { name: "Brussels", permalink: "Brussels" },
+        229: { name: "Flanders", permalink: "Flanders" },
+        230: { name: "Wallonia", permalink: "Wallonia" },
+        231: { name: "Hovedstaden", permalink: "Hovedstaden" },
+        232: { name: "Midtjylland", permalink: "Midtjylland" },
+        233: { name: "Nordjylland", permalink: "Nordjylland" },
+        235: { name: "Sjaelland", permalink: "Sjaelland" },
+        236: { name: "Syddanmark", permalink: "Syddanmark" },
+        237: { name: "Southern Finland", permalink: "Southern-Finland" },
+        238: { name: "Western Finland", permalink: "Western-Finland" },
+        239: { name: "Eastern Finland", permalink: "Eastern-Finland" },
+        240: { name: "Oulu", permalink: "Oulu" },
+        241: { name: "Lapland", permalink: "Lapland" },
+        242: { name: "Aland", permalink: "Aland" },
+        243: { name: "Baden-Wurttemberg", permalink: "Baden-Wurttemberg" },
+        244: { name: "Bavaria", permalink: "Bavaria" },
+        246: { name: "Brandenburg and Berlin", permalink: "Brandenburg-and-Berlin" },
+        249: { name: "Hesse", permalink: "Hesse" },
+        250: { name: "Mecklenburg-Western Pomerania", permalink: "Mecklenburg" },
+        251: { name: "Lower Saxony and Bremen", permalink: "Lower-Saxony-and-Bremen" },
+        252: { name: "North Rhine-Westphalia", permalink: "North-Rhine-Westphalia" },
+        253: { name: "Rhineland-Palatinate", permalink: "Rhineland-Palatinate" },
+        254: { name: "Saarland", permalink: "Saarland" },
+        255: { name: "Saxony", permalink: "Saxony" },
+        256: { name: "Saxony-Anhalt", permalink: "Saxony-Anhalt" },
+        257: { name: "Schleswig-Holstein and Hamburg", permalink: "Schleswig-Holstein-and-Hamburg" },
+        258: { name: "Thuringia", permalink: "Thuringia" },
+        259: { name: "Abruzzo", permalink: "Abruzzo" },
+        260: { name: "Aosta Valley", permalink: "Aosta-Valley" },
+        261: { name: "Apulia", permalink: "Apulia" },
+        262: { name: "Basilicata", permalink: "Basilicata" },
+        263: { name: "Calabria", permalink: "Calabria" },
+        264: { name: "Campania", permalink: "Campania" },
+        265: { name: "Emilia-Romagna", permalink: "Emilia-Romagna" },
+        266: { name: "Friuli-Venezia Giulia", permalink: "Friuli-Venezia-Giulia" },
+        267: { name: "Lazio", permalink: "Lazio" },
+        268: { name: "Liguria", permalink: "Liguria" },
+        269: { name: "Lombardy", permalink: "Lombardy" },
+        270: { name: "Marche", permalink: "Marche" },
+        271: { name: "Molise", permalink: "Molise" },
+        272: { name: "Piedmont", permalink: "Piedmont" },
+        273: { name: "Sardinia", permalink: "Sardinia" },
+        274: { name: "Sicily", permalink: "Sicily" },
+        275: { name: "Trentino-South Tyrol", permalink: "Trentino-South-Tyrol" },
+        276: { name: "Tuscany", permalink: "Tuscany" },
+        277: { name: "Umbria", permalink: "Umbria" },
+        278: { name: "Veneto", permalink: "Veneto" },
+        291: { name: "Nord-Norge", permalink: "Nord-Norge" },
+        292: { name: "Sorlandet", permalink: "Sorlandet" },
+        293: { name: "Trondelag", permalink: "Trondelag" },
+        294: { name: "Vestlandet", permalink: "Vestlandet" },
+        295: { name: "Ostlandet", permalink: "Ostlandet" },
+        306: { name: "Pomerania", permalink: "Pomerania" },
+        307: { name: "Silesia", permalink: "Silesia" },
+        312: { name: "Bratislava", permalink: "Bratislava" },
+        315: { name: "Western Slovakia", permalink: "Western-Slovakia" },
+        316: { name: "Central Slovakia", permalink: "Central-Slovakia" },
+        319: { name: "Eastern Slovakia", permalink: "Eastern-Slovakia" },
+        320: { name: "Svealand", permalink: "Svealand" },
+        321: { name: "Norrland and Sameland", permalink: "Norrland-Sameland" },
+        322: { name: "Jamtland Harjedalen", permalink: "Jamtland-Harjedalen" },
+        323: { name: "Bohus", permalink: "Bohus" },
+        324: { name: "Scania", permalink: "Scania" },
+        325: { name: "Gotaland", permalink: "Gotaland" },
+        326: { name: "Smaland", permalink: "Smaland" },
+        328: { name: "New South Wales", permalink: "New-South-Wales" },
+        329: { name: "Queensland", permalink: "Queensland" },
+        330: { name: "South Australia", permalink: "South-Australia" },
+        331: { name: "Tasmania", permalink: "Tasmania" },
+        332: { name: "Victoria", permalink: "Victoria" },
+        333: { name: "Western Australia", permalink: "Western-Australia" },
+        334: { name: "Northern Territory", permalink: "Northern-Territory" },
+        336: { name: "Deutschschweiz", permalink: "Deutschschweiz" },
+        337: { name: "Romandie", permalink: "Romandie" },
+        338: { name: "Svizzera italiana", permalink: "Svizzera-italiana" },
+        339: { name: "Graubunden", permalink: "Graubunden" },
+        340: { name: "Burgenland", permalink: "Burgenland" },
+        341: { name: "Carinthia", permalink: "Carinthia" },
+        342: { name: "Lower Austria", permalink: "Lower-Austria" },
+        343: { name: "Upper Austria", permalink: "Upper-Austria" },
+        344: { name: "Salzburg", permalink: "Salzburg" },
+        345: { name: "Styria", permalink: "Styria" },
+        346: { name: "Tyrol", permalink: "Tyrol" },
+        347: { name: "Vorarlberg", permalink: "Vorarlberg" },
+        349: { name: "Burgas", permalink: "Burgas" },
+        352: { name: "Vidin", permalink: "Vidin" },
+        353: { name: "Plovdiv", permalink: "Plovdiv" },
+        355: { name: "Sofia", permalink: "Sofia" },
+        356: { name: "Varna", permalink: "Varna" },
+        358: { name: "Ruse", permalink: "Ruse" },
+        361: { name: "Anhui", permalink: "Anhui" },
+        362: { name: "Fujian", permalink: "Fujian" },
+        363: { name: "Gansu", permalink: "Gansu" },
+        364: { name: "Guangdong", permalink: "Guangdong" },
+        368: { name: "Heilongjiang", permalink: "Heilongjiang" },
+        370: { name: "Hubei", permalink: "Hubei" },
+        371: { name: "Hunan", permalink: "Hunan" },
+        372: { name: "Jiangsu", permalink: "Jiangsu" },
+        373: { name: "Jiangxi", permalink: "Jiangxi" },
+        375: { name: "Liaoning", permalink: "Liaoning" },
+        377: { name: "Shaanxi", permalink: "Shaanxi" },
+        378: { name: "Shandong", permalink: "Shandong" },
+        379: { name: "Shanxi", permalink: "Shanxi" },
+        380: { name: "Sichuan", permalink: "Sichuan" },
+        381: { name: "Yunnan", permalink: "Yunnan" },
+        382: { name: "Zhejiang", permalink: "Zhejiang" },
+        384: { name: "Guizhou", permalink: "Guizhou" },
+        385: { name: "Hainan", permalink: "Hainan" },
+        386: { name: "Henan", permalink: "Henan" },
+        387: { name: "Jilin", permalink: "Jilin" },
+        389: { name: "Qinghai", permalink: "Qinghai" },
+        390: { name: "Guangxi", permalink: "Guangxi" },
+        391: { name: "Inner Mongolia", permalink: "Inner-Mongolia" },
+        392: { name: "Ningxia", permalink: "Ningxia" },
+        393: { name: "Xinjiang", permalink: "Xinjiang" },
+        394: { name: "Tibet", permalink: "Tibet" },
+        395: { name: "Beijing", permalink: "Beijing" },
+        396: { name: "Chongqing", permalink: "Chongqing" },
+        397: { name: "Shanghai", permalink: "Shanghai" },
+        413: { name: "Thrace", permalink: "Thrace" },
+        414: { name: "Macedonia", permalink: "Macedonia" },
+        415: { name: "Thessaly", permalink: "Thessaly" },
+        416: { name: "Epirus", permalink: "Epirus" },
+        417: { name: "Central Greece", permalink: "Central-Greece" },
+        418: { name: "Attica", permalink: "Attica" },
+        419: { name: "Peloponnese", permalink: "Peloponnese" },
+        420: { name: "Aegean Islands", permalink: "Aegean-Islands" },
+        421: { name: "Ionian Islands", permalink: "Ionian-Islands" },
+        422: { name: "Crete", permalink: "Crete" },
+        423: { name: "Mazuria", permalink: "Mazuria" },
+        424: { name: "Mazovia", permalink: "Mazovia" },
+        425: { name: "Little Poland", permalink: "Little-Poland" },
+        426: { name: "Great Poland", permalink: "Great-Poland" },
+        437: { name: "Southern Bohemia", permalink: "Southern-Bohemia" },
+        440: { name: "Moravia", permalink: "Moravia" },
+        442: { name: "Northern Bohemia", permalink: "Northern-Bohemia" },
+        443: { name: "Northern India", permalink: "Northern-India" },
+        445: { name: "Uttar Pradesh", permalink: "Uttar-Pradesh" },
+        446: { name: "Rajasthan", permalink: "Rajasthan" },
+        447: { name: "Madhya Pradesh", permalink: "Madhya-Pradesh" },
+        448: { name: "Gujarat", permalink: "Gujarat" },
+        449: { name: "Maharashtra", permalink: "Maharashtra" },
+        450: { name: "Andhra Pradesh", permalink: "Andhra-Pradesh" },
+        451: { name: "Karnataka", permalink: "Karnataka" },
+        452: { name: "Tamil Nadu", permalink: "Tamil-Nadu" },
+        453: { name: "Kerala", permalink: "Kerala" },
+        454: { name: "Orissa", permalink: "Orissa" },
+        455: { name: "Chhattisgarh", permalink: "Chhattisgarh" },
+        456: { name: "Jharkhand", permalink: "Jharkhand" },
+        457: { name: "West Bengal", permalink: "West-Bengal" },
+        458: { name: "Bihar", permalink: "Bihar" },
+        459: { name: "North Eastern India", permalink: "North-Eastern-India" },
+        460: { name: "Sumatra", permalink: "Sumatra" },
+        461: { name: "Java", permalink: "Java" },
+        462: { name: "Kalimantan", permalink: "Kalimantan" },
+        463: { name: "Lesser Sunda Islands", permalink: "Lesser-Sunda-Islands" },
+        464: { name: "Sulawesi", permalink: "Sulawesi" },
+        465: { name: "Maluku islands", permalink: "Maluku-islands" },
+        466: { name: "Papua", permalink: "Papua" },
+        467: { name: "Jerusalem district", permalink: "Jerusalem-district" },
+        468: { name: "Nazareth North District", permalink: "Nazareth-North-District" },
+        469: { name: "Haifa district", permalink: "Haifa-district" },
+        470: { name: "Tel Aviv Center District", permalink: "Tel-Aviv-Center-District" },
+        471: { name: "Beersheba South District", permalink: "Beersheba-South-District" },
+        472: { name: "Kerman Province", permalink: "Kerman-Province" },
+        473: { name: "Sistan and Baluchistan", permalink: "Sistan-Baluchistan" },
+        474: { name: "South Khorasan", permalink: "South-Khorasan" },
+        475: { name: "Razavi Khorasan", permalink: "Razavi-Khorasan" },
+        476: { name: "Yazd", permalink: "Yazd" },
+        477: { name: "Semnan", permalink: "Semnan" },
+        478: { name: "Esfahan", permalink: "Esfahan" },
+        479: { name: "Fars", permalink: "Fars" },
+        480: { name: "Hormozgan", permalink: "Hormozgan" },
+        481: { name: "Southwestern Iran", permalink: "Southwestern-Iran" },
+        482: { name: "Northwestern Iran", permalink: "Northwestern-Iran" },
+        483: { name: "Mazandaran and Golistan", permalink: "Mazandaran-and-Golistan" },
+        484: { name: "Hokkaido", permalink: "Hokkaido" },
+        485: { name: "Tohoku", permalink: "Tohoku" },
+        486: { name: "Kanto", permalink: "Kanto" },
+        487: { name: "Chubu", permalink: "Chubu" },
+        488: { name: "Kinki", permalink: "Kinki" },
+        489: { name: "Chugoku", permalink: "Chugoku" },
+        490: { name: "Shikoku", permalink: "Shikoku" },
+        491: { name: "Kyushu", permalink: "Kyushu" },
+        492: { name: "Balochistan", permalink: "Balochistan" },
+        493: { name: "North-West Frontier Province", permalink: "North-West-Frontier" },
+        494: { name: "Punjab", permalink: "Punjab" },
+        495: { name: "Sindh", permalink: "Sindh" },
+        497: { name: "Eastern Cape", permalink: "Eastern-Cape" },
+        498: { name: "Free State", permalink: "Free-State" },
+        499: { name: "Gauteng", permalink: "Gauteng" },
+        500: { name: "KwaZulu Natal", permalink: "KwaZulu-Natal" },
+        501: { name: "Limpopo", permalink: "Limpopo" },
+        502: { name: "Mpumalanga", permalink: "Mpumalanga" },
+        503: { name: "North West Province", permalink: "North-West-Province" },
+        504: { name: "Northern Cape", permalink: "Northern-Cape" },
+        505: { name: "Western Cape", permalink: "Western-Cape" },
+        507: { name: "Central Thailand", permalink: "Central-Thailand" },
+        508: { name: "Northern Thailand", permalink: "Northern-Thailand" },
+        509: { name: "Eastern Thailand", permalink: "Eastern-Thailand" },
+        510: { name: "Southern Thailand", permalink: "Southern-Thailand" },
+        511: { name: "North-Eastern Thailand", permalink: "North-Eastern-Thailand" },
+        512: { name: "Aegean Coast of Turkey", permalink: "Aegean-Coast-of-Turkey" },
+        513: { name: "Black Sea Coast of Turkey", permalink: "Black-Sea-Coast-of-Turkey" },
+        514: { name: "Central Anatolia", permalink: "Central-Anatolia" },
+        515: { name: "Eastern Anatolia", permalink: "Eastern-Anatolia" },
+        516: { name: "Marmara", permalink: "Marmara" },
+        517: { name: "Mediterranean Coast of Turkey", permalink: "Mediterranean-Coast-of-Turkey" },
+        518: { name: "Southeastern Anatolia", permalink: "Southeastern-Anatolia" },
+        519: { name: "Gyeonggi-do", permalink: "Gyeonggi" },
+        520: { name: "Gangwon-do", permalink: "Gangwon" },
+        521: { name: "Chungcheongbuk-do", permalink: "Chungcheongbuk" },
+        522: { name: "Chungcheongnam-do", permalink: "Chungcheongnam" },
+        523: { name: "Jeollabuk-do", permalink: "Jeollabuk" },
+        524: { name: "Jeollanam-do", permalink: "Jeollanam" },
+        525: { name: "Gyeongsangbuk-do", permalink: "Gyeongsangbuk" },
+        526: { name: "Gyeongsangnam-do", permalink: "Gyeongsangnam" },
+        527: { name: "Jeju", permalink: "Jeju" },
+        528: { name: "Western Netherlands", permalink: "Western-Netherlands" },
+        529: { name: "Southern Netherlands", permalink: "Southern-Netherlands" },
+        530: { name: "Eastern Netherlands", permalink: "Eastern-Netherlands" },
+        531: { name: "Northern Netherlands", permalink: "Northern-Netherlands" },
+        532: { name: "Moscow and Central Russia", permalink: "Moscow-and-Central-Russia" },
+        533: { name: "Central Black Earth", permalink: "Central-Black-Earth" },
+        534: { name: "Eastern Siberia", permalink: "Eastern-Siberia" },
+        535: { name: "Far Eastern Russia", permalink: "Far-Eastern-Russia" },
+        536: { name: "Northern Russia", permalink: "Northern-Russia" },
+        537: { name: "North Caucasus", permalink: "North-Caucasus" },
+        538: { name: "Leningrad Oblast", permalink: "Leningrad-Oblast" },
+        540: { name: "Urals", permalink: "Urals" },
+        541: { name: "Volga Vyatka", permalink: "Volga-Vyatka" },
+        542: { name: "Western Siberia", permalink: "Western-Siberia" },
+        543: { name: "Kaliningrad", permalink: "Kaliningrad" },
+        544: { name: "Volga", permalink: "Volga" },
+        549: { name: "Gotland", permalink: "Gotland" },
+        561: { name: "Jammu and Kashmir", permalink: "Jammu-Kashmir" },
+        562: { name: "Svalbard & Jan Mayen", permalink: "Svalbard-Jan-Mayen" },
+        571: { name: "Slovenian Littoral", permalink: "Slovenian-Littoral" },
+        581: { name: "Inner Carniola", permalink: "Inner-Carniola" },
+        591: { name: "Upper Carniola", permalink: "Upper-Carniola" },
+        601: { name: "Styria and Carinthia", permalink: "Styria-Carinthia" },
+        611: { name: "Lower Carniola", permalink: "Lower-Carniola" },
+        621: { name: "Prekmurje", permalink: "Prekmurje" },
+        622: { name: "Slavonia", permalink: "Slavonia" },
+        623: { name: "Central Croatia", permalink: "Central-Croatia" },
+        624: { name: "Northwest Croatia", permalink: "Northwest-Croatia" },
+        625: { name: "Lika and Gorski Kotar", permalink: "Lika-Gorski-Kotar" },
+        626: { name: "Istria and Kvarner", permalink: "Istria-Kvarner" },
+        627: { name: "North Dalmatia", permalink: "North-Dalmatia" },
+        628: { name: "South Dalmatia", permalink: "South-Dalmatia" },
+        629: { name: "Norte Grande", permalink: "Norte-Grande" },
+        630: { name: "Norte Chico", permalink: "Norte-Chico" },
+        631: { name: "Zona Central", permalink: "Zona-Central" },
+        632: { name: "Zona Sur", permalink: "Zona-Sur" },
+        633: { name: "Zona Austral", permalink: "Zona-Austral" },
+        634: { name: "Vojvodina", permalink: "Vojvodina" },
+        635: { name: "Belgrade", permalink: "Belgrade" },
+        636: { name: "Sumadija", permalink: "Sumadija" },
+        637: { name: "Eastern Serbia", permalink: "Eastern-Serbia" },
+        638: { name: "Western Serbia", permalink: "Western-Serbia" },
+        639: { name: "Raska", permalink: "Raska" },
+        640: { name: "Southern Serbia", permalink: "Southern-Serbia" },
+        641: { name: "Sabah", permalink: "Sabah" },
+        642: { name: "Sarawak", permalink: "Sarawak" },
+        643: { name: "Peninsular Malaysia", permalink: "Peninsular-Malaysia" },
+        644: { name: "Luzon", permalink: "Luzon" },
+        645: { name: "Visayas", permalink: "Visayas" },
+        646: { name: "Mindanao", permalink: "Mindanao" },
+        647: { name: "Palawan", permalink: "Palawan" },
+        648: { name: "Singapore City", permalink: "Singapore-City" },
+        649: { name: "West Srpska Republic", permalink: "West-Srpska-Republic" },
+        650: { name: "East Srpska Republic", permalink: "East-Srpska-Republic" },
+        651: { name: "Brcko District", permalink: "Brcko-District" },
+        652: { name: "Federation of BiH", permalink: "Federation-of-BiH" },
+        653: { name: "Rio Grande do Sul", permalink: "Rio-Grande-do-Sul" },
+        654: { name: "Pohja-Eesti", permalink: "Pohja-Eesti" },
+        655: { name: "Kirde-Eesti", permalink: "Kirde-Eesti" },
+        656: { name: "Kesk-Eesti", permalink: "Kesk-Eesti" },
+        657: { name: "Laane-Eesti", permalink: "Laane-Eesti" },
+        658: { name: "Louna-Eesti", permalink: "Louna-Eesti" },
+        659: { name: "Vidzeme", permalink: "Vidzeme" },
+        660: { name: "Latgale", permalink: "Latgale" },
+        661: { name: "Zemgale", permalink: "Zemgale" },
+        662: { name: "Kurzeme", permalink: "Kurzeme" },
+        663: { name: "Lithuania Minor", permalink: "Lithuania-Minor" },
+        664: { name: "Samogitia", permalink: "Samogitia" },
+        665: { name: "Lithuanian Highland", permalink: "Lithuanian-Highland" },
+        666: { name: "Dainava", permalink: "Dainava" },
+        667: { name: "Sudovia", permalink: "Sudovia" },
+        668: { name: "Chagang", permalink: "Chagang" },
+        669: { name: "Pyongan", permalink: "Pyongan" },
+        670: { name: "Hwangae", permalink: "Hwangae" },
+        671: { name: "Kangwon", permalink: "Kangwon" },
+        672: { name: "Hamgyong", permalink: "Hamgyong" },
+        673: { name: "Ryanggang", permalink: "Ryanggang" },
+        674: { name: "Charrua", permalink: "Charrua" },
+        675: { name: "Paranena", permalink: "Paranena" },
+        676: { name: "Central East Chaco", permalink: "Central-East-Chaco" },
+        677: { name: "Chuquisaca and Tarija", permalink: "Chuquisaca-and-Tarija" },
+        678: { name: "Beni and Cochabamba", permalink: "Beni-and-Cochabamba" },
+        679: { name: "Santa Cruz", permalink: "Santa-Cruz" },
+        680: { name: "Bolivian Altiplano", permalink: "Bolivian-Altiplano" },
+        681: { name: "Pando", permalink: "Pando" },
+        682: { name: "Great Andes", permalink: "Great-Andes" },
+        683: { name: "Mid Andes", permalink: "Mid-Andes" },
+        684: { name: "Low Andes", permalink: "Low-Andes" },
+        685: { name: "Chimor", permalink: "Chimor" },
+        686: { name: "Northern Low Amazon", permalink: "Northern-Low-Amazon" },
+        687: { name: "Southern Low Amazon", permalink: "Southern-Low-Amazon" },
+        688: { name: "Lima", permalink: "Lima" },
+        689: { name: "Amazonica", permalink: "Amazonica" },
+        690: { name: "Andina", permalink: "Andina" },
+        691: { name: "Caribe e Insular", permalink: "Caribe-e-Insular" },
+        692: { name: "Orinoquia", permalink: "Orinoquia" },
+        693: { name: "Pacifica", permalink: "Pacifica" },
+        694: { name: "Cundiboyacense", permalink: "Cundiboyacense" },
+        695: { name: "Povardarie", permalink: "Povardarie" },
+        696: { name: "Western Macedonia", permalink: "Western-Macedonia" },
+        697: { name: "Eastern Macedonia", permalink: "Eastern-Macedonia" },
+        698: { name: "North Montenegrin Mountains", permalink: "North-Montenegrin-Mountains" },
+        699: { name: "Central Montenegro", permalink: "Central-Montenegro" },
+        700: { name: "Montenegrin Coast", permalink: "Montenegrin-Coast" },
+        701: { name: "Northern Taiwan", permalink: "Northern-Taiwan" },
+        702: { name: "Central Taiwan", permalink: "Central-Taiwan" },
+        703: { name: "Eastern Taiwan", permalink: "Eastern-Taiwan" },
+        704: { name: "Southern Taiwan", permalink: "Southern-Taiwan" },
+        705: { name: "Southern Cyprus", permalink: "Southern-Cyprus" },
+        706: { name: "Northern Cyprus", permalink: "Northern-Cyprus" },
+        707: { name: "Brestskaya", permalink: "Brestskaya" },
+        708: { name: "Homelskaya", permalink: "Homelskaya" },
+        709: { name: "Hrodzienskaya", permalink: "Hrodzienskaya" },
+        710: { name: "Minskaya", permalink: "Minskaya" },
+        711: { name: "Mahilyowskaya", permalink: "Mahilyowskaya" },
+        712: { name: "Vitsebskaya", permalink: "Vitsebskaya" },
+        713: { name: "Auckland", permalink: "Auckland" },
+        714: { name: "Wellington", permalink: "Wellington" },
+        715: { name: "Canterbury", permalink: "Canterbury" },
+        716: { name: "Otago", permalink: "Otago" },
+        717: { name: "Al Riyadh", permalink: "Al-Riyadh" },
+        718: { name: "Al Bahah", permalink: "Al-Bahah" },
+        719: { name: "Northern Borders", permalink: "Northern-Borders" },
+        720: { name: "Al Jawf", permalink: "Al-Jawf" },
+        721: { name: "Al Madinah", permalink: "Al-Madinah" },
+        722: { name: "Al Qasim", permalink: "Al-Qasim" },
+        723: { name: "Ha'il", permalink: "Ha-il" },
+        724: { name: "Asir", permalink: "Asir" },
+        725: { name: "Eastern Province", permalink: "Eastern-Province" },
+        726: { name: "Tabuk", permalink: "Tabuk" },
+        727: { name: "Najran", permalink: "Najran" },
+        728: { name: "Makkah", permalink: "Makkah" },
+        729: { name: "Jizan", permalink: "Jizan" },
+        730: { name: "Sinai", permalink: "Sinai" },
+        731: { name: "Lower Egypt", permalink: "Lower-Egypt" },
+        732: { name: "Western Desert", permalink: "Western-Desert" },
+        733: { name: "Middle Egypt", permalink: "Middle-Egypt" },
+        734: { name: "Upper Egypt", permalink: "Upper-Egypt" },
+        735: { name: "Red Sea Coast", permalink: "Red-Sea-Coast" },
+        736: { name: "Abu Dhabi", permalink: "Abu-Dhabi" },
+        737: { name: "Dubai", permalink: "Dubai" },
+        738: { name: "Sharjah", permalink: "Sharjah" },
+        739: { name: "Ajman", permalink: "Ajman" },
+        740: { name: "Ras al-Khaimah", permalink: "Ras-al-Khaimah" },
+        741: { name: "Umm al Quwain", permalink: "Umm-al-Quwain" },
+        742: { name: "Fujairah", permalink: "Fujairah" },
+        743: { name: "Kosovo", permalink: "Kosovo" },
+        744: { name: "Tirana", permalink: "Tirana" },
+        745: { name: "Albanian Coast", permalink: "Albanian-Coast" },
+        746: { name: "Southeastern Albania", permalink: "Southeastern-Albania" },
+        747: { name: "Abkhazia", permalink: "Abkhazia" },
+        748: { name: "West Georgia", permalink: "West-Georgia" },
+        749: { name: "Lower Kartli", permalink: "Lower-Kartli" },
+        750: { name: "Inner Kartli", permalink: "Inner-Kartli" },
+        751: { name: "Kakheti", permalink: "Kakheti" },
+        752: { name: "Northern Armenia", permalink: "Northern-Armenia" },
+        753: { name: "Central Armenia", permalink: "Central-Armenia" },
+        754: { name: "Syunik", permalink: "Syunik" },
+        755: { name: "Gegharkunik", permalink: "Gegharkunik" },
+        756: { name: "North West States", permalink: "North-West-States" },
+        757: { name: "North East States", permalink: "North-East-States" },
+        758: { name: "North Central States", permalink: "North-Central-States" },
+        759: { name: "South West States", permalink: "South-West-States" },
+        760: { name: "South South States", permalink: "South-South-States" },
+        761: { name: "South East States", permalink: "South-East-States" },
+        762: { name: "Western Cuba", permalink: "Western-Cuba" },
+        763: { name: "Las Villas", permalink: "Las-Villas" },
+        764: { name: "Oriente", permalink: "Oriente" }
+    };
 
     const companyDefinitions = {
         // Food Raw
@@ -111,12 +688,17 @@
             infrastructure: { auto: true },
             workforce: { auto: true },
             storage: { auto: false },
-            energy: { auto: true }
+            energy: { auto: true },
+            intelligence: { auto: true }
         },
         syncMeta: {
             lastDay: 0,
             timestamps: {}
-        }
+        },
+        productivityCache: {},
+        tycoonBonus: 0,
+        tycoonUntil: 0,
+        wamSelections: {}
     };
 
     // ==========================================
@@ -245,7 +827,6 @@
     async function initCustomManager() {
         if (!window.location.pathname.startsWith(CUSTOM_URL)) return;
 
-        document.title = "Custom Company Manager";
         document.body.innerHTML = '';
         document.head.innerHTML = `
             <style>
@@ -415,11 +996,11 @@
                     transition: opacity 0.3s, transform 0.3s;
                 }
 
-                .col-name { width: 35%; }
+                .col-name { width: 30%; }
                 .col-q { width: 10%; }
                 .col-emp { width: 15%; }
                 .col-hold { width: 25%; }
-                .col-stat { width: 15%; }
+                .col-stat { width: 20%; }
                 
                 .summary { font-size: 0.75rem; color: var(--on-surface-variant); margin-bottom: 15px; line-height: 1.4; }
                 
@@ -453,6 +1034,7 @@
                 <div class="header">
                     <h1>Custom Company Manager</h1>
                     <div style="display:flex; align-items:center; gap:15px;">
+                        <span id="tycoon-display" style="font-weight: bold; color: var(--secondary); font-size: 13px;"></span>
                         <span id="energy-display" style="font-weight: bold; color: var(--primary);">Energy: --</span>
                         <button id="btn-sync" class="btn">Full System Sync</button>
                     </div>
@@ -499,7 +1081,7 @@
                                 <span>Productivity ≥</span>
                                 <div style="display:flex; align-items:center; gap:2px;">
                                     <input type="number" id="filter-prod-num" value="0" min="0" max="300" 
-                                           style="width:50px; background:transparent; border:none; border-bottom:1px solid var(--outline); color:var(--primary); font-weight:bold; text-align:right; font-size:0.75rem; padding:0;" />
+                                           style="width:60px; background:transparent; border:none; border-bottom:1px solid var(--outline); color:var(--primary); font-weight:bold; text-align:right; font-size:0.875rem; padding:0;" />
                                     <span style="color:var(--on-surface-variant); font-size:0.75rem;">%</span>
                                 </div>
                             </label>
@@ -510,6 +1092,16 @@
 
                         <h3 style="margin-top:0">Mass Actions</h3>
                         <p class="summary" id="action-summary">Select a specific holding to enable Work as Manager.</p>
+                        
+                        <div id="wam-selector-container" style="display:none; margin-bottom:15px;">
+                            <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                                <span style="font-size:0.75rem; color:var(--on-surface-variant);">Companies to WAM:</span>
+                                <strong id="wam-selected-count" style="color:var(--primary);">0</strong>
+                            </label>
+                            <input type="range" id="wam-slider" min="0" max="0" value="0" style="width:100%; accent-color:var(--primary); background:var(--surface-container-highest);">
+                            <button id="btn-select-by-energy" class="btn btn-secondary" style="width:100%; margin-top:10px; padding: 5px; font-size: 0.6875rem;">Select by Energy</button>
+                        </div>
+
                         <div style="display:flex; align-items:center; gap:15px; margin-bottom:10px;">
                             <button id="btn-wam" class="btn" disabled>Work as Manager in Holding</button>
                             <div style="display:flex; flex-direction:column; gap:5px;">
@@ -642,10 +1234,59 @@
         prodNum.addEventListener('input', e => updateProd(e.target.value));
 
         document.getElementById('btn-wam').addEventListener('click', performMassWam);
+
+        document.getElementById('btn-select-by-energy').addEventListener('click', () => {
+            const energyAvailable = AppState.energyData.energy || 0;
+            const maxCompanies = Math.floor(energyAvailable / 10);
+            const wamSlider = document.getElementById('wam-slider');
+            if (wamSlider) {
+                wamSlider.value = Math.min(maxCompanies, parseInt(wamSlider.max));
+                wamSlider.dispatchEvent(new Event('input'));
+            }
+        });
+
+        const wamSlider = document.getElementById('wam-slider');
+        if (wamSlider) {
+            wamSlider.addEventListener('input', e => {
+                let totalToDistribute = parseInt(e.target.value);
+                const items = AppState.virtualList.items;
+
+                // Distribute greedily from top down
+                items.forEach(group => {
+                    const isWammable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(group.industry);
+                    if (!isWammable || group.pending <= 0) {
+                        group.wamCount = 0;
+                        return;
+                    }
+                    const take = Math.min(totalToDistribute, group.pending);
+                    group.wamCount = take;
+                    totalToDistribute -= take;
+                });
+
+                AppState.virtualList.render();
+                updateActionUI();
+            });
+        }
+
+        // Global delegation for table inputs
+        document.body.addEventListener('input', e => {
+            if (e.target.classList.contains('wam-input')) {
+                const key = e.target.dataset.key;
+                const val = Math.max(0, parseInt(e.target.value) || 0);
+                const items = AppState.virtualList.items;
+                const group = items.find(g => g.key === key);
+                if (group) {
+                    group.wamCount = Math.min(val, group.pending);
+                    e.target.value = group.wamCount; // Clamp UI
+                }
+                updateActionUI();
+            }
+        });
+
         document.getElementById('btn-assign').addEventListener('click', performEmployeeAssignment);
         document.getElementById('emp-amount').addEventListener('input', updateActionUI);
 
-        document.getElementById('upgrade-target-q').addEventListener('change', updateActionUI);        document.getElementById('upgrade-amount').addEventListener('input', updateActionUI);
+        document.getElementById('upgrade-target-q').addEventListener('change', updateActionUI); document.getElementById('upgrade-amount').addEventListener('input', updateActionUI);
 
         document.getElementById('btn-mass-upgrade').addEventListener('click', performMassUpgrade);
         document.getElementById('btn-work-emp').addEventListener('click', performEmployeeWork);
@@ -676,7 +1317,11 @@
             if (AppState.syncSettings.workforce.auto) await syncWorkforce(true);
             if (AppState.syncSettings.storage.auto) await syncStorage(true);
             if (AppState.syncSettings.energy.auto) await syncEnergy();
+            if (AppState.syncSettings.intelligence.auto) await syncIntelligence();
         };
+
+        document.title = "Custom Company Manager";
+
         autoSync();
     }
 
@@ -686,6 +1331,7 @@
     async function loadDataFromDb() {
         const companies = await getDbValue('companies') || {};
         const holdings = await getDbValue('holdingCompanies') || {};
+        const inventory = await getDbValue('inventory') || {};
         AppState.employeesArr = await getDbValue('employees') || [];
         AppState.employeeOverview = await getDbValue('employeeOverview') || {};
         AppState.pageDetails = await getDbValue('pageDetails') || {};
@@ -697,10 +1343,61 @@
             infrastructure: { auto: true },
             workforce: { auto: true },
             storage: { auto: false },
-            energy: { auto: true }
+            energy: { auto: true },
+            intelligence: { auto: true }
         };
         // Ensure migration for existing users
         if (!AppState.syncSettings.energy) AppState.syncSettings.energy = { auto: true };
+        if (!AppState.syncSettings.intelligence) AppState.syncSettings.intelligence = { auto: true };
+
+        AppState.productivityCache = await getDbValue('productivityCache') || {};
+
+        // 1. Unify Raw Material Stocks
+        if (Array.isArray(inventory)) {
+            const mainStorage = inventory.find(s => s.id === 'mainStorage');
+            if (mainStorage && mainStorage.items) {
+                const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
+                mainStorage.items.forEach(item => {
+                    if (rawMap[item.industryId]) {
+                        AppState.pageDetails[rawMap[item.industryId]] = item.amount;
+                    }
+                });
+            }
+
+            // 2. Detect Tycoon Pack Bonus
+            const activeEnhancements = inventory.find(s => s.id === 'activeEnhancements');
+            AppState.tycoonBonus = 0;
+            AppState.tycoonUntil = 0;
+            if (activeEnhancements && activeEnhancements.items) {
+                const tycoon = activeEnhancements.items.find(i => i.id.includes('productivity_bonus'));
+                if (tycoon) {
+                    // Extract percentage
+                    const match = tycoon.id.match(/productivity_bonus_(\d+)_active/);
+                    if (match) AppState.tycoonBonus = parseInt(match[1]);
+                    else if (tycoon.attributes && tycoon.attributes.productivity_bonus) {
+                        AppState.tycoonBonus = parseInt(tycoon.attributes.productivity_bonus);
+                    }
+                    // Extract expiry
+                    if (tycoon.attributes && tycoon.attributes.active) {
+                        AppState.tycoonUntil = parseInt(tycoon.attributes.active.activeUntil) || 0;
+                    }
+                }
+            }
+        }
+
+        // 3. Expiration Check
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (AppState.tycoonUntil > 0 && nowSec > AppState.tycoonUntil) {
+            console.log('[Tycoon] Bonus expired. Resetting.');
+            AppState.tycoonBonus = 0;
+            AppState.tycoonUntil = 0;
+        }
+
+        // Update Header UI
+        const tycoonDisp = document.getElementById('tycoon-display');
+        if (tycoonDisp) {
+            tycoonDisp.textContent = AppState.tycoonBonus > 0 ? `Tycoon active: +${AppState.tycoonBonus}%` : '';
+        }
 
         AppState.companiesArr = Object.values(companies);
         AppState.holdingsMap = holdings;
@@ -740,6 +1437,30 @@
             // Bind calculations for easier rendering
             c.calculated_industry = calcInd;
             c.calculated_quality = calcQual;
+
+            // Productivity Intelligence Override
+            const hId = c.holding_company_id;
+            const regionId = hId && AppState.holdingsMap[hId] ? AppState.holdingsMap[hId].region_id : null;
+            const intel = regionId ? AppState.productivityCache[regionId] : null;
+            if (intel && intel.data) {
+                const d = intel.data;
+                let apiVal = 1; // Default
+                const baseInd = calcInd.replace('_raw', '');
+
+                if (calcInd.endsWith('_raw')) {
+                    const rawShorthand = { food: 'frm', weapon: 'wrm', house: 'hrm', aircraft: 'arm' };
+                    const field = `${rawShorthand[baseInd] || baseInd}_productivity`;
+                    apiVal = d[field] || 1;
+                } else {
+                    const field = `${baseInd}_${calcQual}_productivity`; // weapon_7_productivity
+                    apiVal = d[field] || 1;
+                }
+
+                c.effective_bonus = (apiVal * 100) + AppState.tycoonBonus;
+            } else {
+                // Base + Tycoon if no API data
+                c.effective_bonus = (c.effective_bonus || 100) + AppState.tycoonBonus;
+            }
 
             let passHolding = true;
             if (holding === 'unassigned') passHolding = (c.holding_company_id === false);
@@ -794,6 +1515,22 @@
             if (a.industry < b.industry) return -1;
             if (a.industry > b.industry) return 1;
             return a.quality - b.quality;
+        });
+
+        // Restore WAM selections from state or initialize to max pending
+        aggregatedArr.forEach(group => {
+            const isWammable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(group.industry);
+            if (isWammable) {
+                // Use stored selection if it exists, otherwise default to all pending
+                if (typeof AppState.wamSelections[group.key] !== 'undefined') {
+                    group.wamCount = Math.min(AppState.wamSelections[group.key], group.pending);
+                } else {
+                    group.wamCount = group.pending;
+                }
+                AppState.wamSelections[group.key] = group.wamCount;
+            } else {
+                group.wamCount = 0;
+            }
         });
 
         AppState.virtualList.setItems(aggregatedArr);
@@ -934,10 +1671,20 @@
         const isWammable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(comp.industry);
 
         if (comp.worked > 0) statusStr += `<span class="status-chip chip-success" style="margin-right:2px">${comp.worked} Worked</span>`;
-        if (comp.pending > 0 && isWammable) {
-            statusStr += `<span class="status-chip chip-danger">${comp.pending} Pending</span>`;
-        } else if (!isWammable) {
-            statusStr += `<span class="status-chip" style="background:var(--surface-variant); color:var(--on-surface-variant)">Not WAM-able</span>`;
+
+        if (comp.pending > 0) {
+            if (isWammable && AppState.filters.holding !== 'all' && AppState.filters.holding !== 'unassigned') {
+                statusStr += `
+                    <div style="display:inline-flex; align-items:center; gap:5px; margin-left:5px;">
+                        <input type="number" class="wam-input" data-key="${comp.key}" value="${comp.wamCount || 0}" min="0" max="${comp.pending}" 
+                               style="width:40px; background:var(--surface-container-highest); border:none; border-bottom:1px solid var(--primary); color:#fff; text-align:center; font-size:0.75rem; padding:2px 0; border-radius:2px;">
+                        <span style="font-size:0.65rem; color:var(--on-surface-variant)">/ ${comp.pending}</span>
+                    </div>`;
+            } else if (isWammable) {
+                statusStr += `<span class="status-chip chip-danger">${comp.pending} Pending</span>`;
+            } else {
+                statusStr += `<span class="status-chip" style="background:var(--surface-variant); color:var(--on-surface-variant)">Not WAM-able</span>`;
+            }
         }
 
         let empStr = '';
@@ -973,6 +1720,9 @@
     function updateActionUI() {
         const btnWam = document.getElementById('btn-wam');
         const summary = document.getElementById('action-summary');
+        const wamContainer = document.getElementById('wam-selector-container');
+        const wamSlider = document.getElementById('wam-slider');
+        const wamCountLabel = document.getElementById('wam-selected-count');
         const btnAssign = document.getElementById('btn-assign');
         const assignSummary = document.getElementById('assign-summary');
         const empAmount = document.getElementById('emp-amount');
@@ -983,17 +1733,34 @@
         if (holding === 'all' || holding === 'unassigned') {
             btnWam.disabled = true;
             summary.textContent = 'Select a specific holding to enable Work as Manager.';
+            if (wamContainer) wamContainer.style.display = 'none';
         } else {
-            const pendingWam = AppState.filteredArr.filter(c => !c.already_worked && !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(c.calculated_industry));
+            if (wamContainer) wamContainer.style.display = 'block';
 
-            if (pendingWam.length === 0) {
+            // 1. Calculate Selection Stats
+            const workableGroups = AppState.virtualList.items.filter(g =>
+                !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(g.industry) && g.pending > 0
+            );
+
+            const totalWorkable = workableGroups.reduce((sum, g) => sum + g.pending, 0);
+            const currentSelected = workableGroups.reduce((sum, g) => sum + (g.wamCount || 0), 0);
+
+            if (wamSlider) {
+                wamSlider.max = totalWorkable;
+                if (parseInt(wamSlider.value) !== currentSelected) {
+                    wamSlider.value = currentSelected;
+                }
+            }
+            if (wamCountLabel) wamCountLabel.textContent = currentSelected;
+
+            if (currentSelected === 0) {
                 btnWam.disabled = true;
-                summary.textContent = 'No pending workable companies in this holding/filter combination.';
+                summary.textContent = totalWorkable > 0 ? 'Select companies using the slider or table inputs to work.' : 'No pending workable companies in this holding/filter combination.';
             } else {
-                const energyRequired = pendingWam.length * 10;
+                const energyRequired = currentSelected * 10;
                 const hasEnergy = (AppState.energyData.energy >= energyRequired);
 
-                // Production & Raw estimates for WAM (Quality-Aware)
+                // Production & Raw estimates for EFFECTIVE selection
                 const breakdown = {};
                 const rawNames = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
                 const prodNames = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
@@ -1004,26 +1771,35 @@
                     ARM: { produced: 0, consumed: 0 }
                 };
 
-                pendingWam.forEach(c => {
-                    const fname = c.building_img.split('/').pop();
-                    const def = companyDefinitions[fname];
-                    if (def && def.baseProduction) {
-                        const amount = def.baseProduction * (parseFloat(c.effective_bonus) || 100) / 100;
-                        const industry = def.industry;
+                workableGroups.forEach(group => {
+                    const count = group.wamCount || 0;
+                    if (count <= 0) return;
+
+                    const sample = AppState.filteredArr.find(c => {
+                        const fname = c.building_img.split('/').pop();
+                        const def = companyDefinitions[fname];
+                        return def && def.industry === group.industry && def.quality === `q${group.quality}`;
+                    });
+
+                    if (sample) {
+                        const fname = sample.building_img.split('/').pop();
+                        const def = companyDefinitions[fname];
+                        const amountPerWork = def.baseProduction * (parseFloat(sample.effective_bonus) || 100) / 100;
+                        const industry = group.industry;
                         const isRaw = industry.endsWith('_raw');
-                        
+
                         if (isRaw) {
                             const rawType = rawNames[industry.replace('_raw', '')];
-                            rawProjected[rawType].produced += amount;
+                            rawProjected[rawType].produced += (amountPerWork * count);
                             if (!breakdown[industry]) breakdown[industry] = { prod: 0, cons: 0, label: rawType, rawType };
-                            breakdown[industry].prod += amount;
+                            breakdown[industry].prod += (amountPerWork * count);
                         } else {
                             const rawType = rawNames[industry];
-                            const key = `${industry}_q${c.quality}`;
-                            if (!breakdown[key]) breakdown[key] = { prod: 0, cons: 0, label: `Q${c.quality} ${prodNames[industry]}`, rawType };
-                            breakdown[key].prod += amount;
+                            const key = `${industry}_q${group.quality}`;
+                            if (!breakdown[key]) breakdown[key] = { prod: 0, cons: 0, label: `Q${group.quality} ${prodNames[industry]}`, rawType };
+                            breakdown[key].prod += (amountPerWork * count);
                             if (def.rawCost) {
-                                const cons = amount * def.rawCost;
+                                const cons = (amountPerWork * count) * def.rawCost;
                                 breakdown[key].cons += cons;
                                 rawProjected[rawType].consumed += cons;
                             }
@@ -1049,15 +1825,13 @@
                 };
 
                 Object.entries(rawProjected).forEach(([type, stats]) => {
-                    if (stats.produced > 0 || stats.consumed > 0) {
-                        const current = stockMap[type] || 0;
-                        const final = current + stats.produced - stats.consumed;
-                        const color = final >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
-                        deltaHtml += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong style="color:${color}">${final.toFixed(2)}</strong></span><br>`;
-                    }
+                    const current = stockMap[type] || 0;
+                    const final = current + stats.produced - stats.consumed;
+                    const color = final >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
+                    deltaHtml += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong style="color:${color}">${final.toFixed(2)}</strong></span><br>`;
                 });
 
-                summary.innerHTML = `Found <strong>${pendingWam.length}</strong> workable companies.<br>
+                summary.innerHTML = `Selection: <strong>${currentSelected}</strong> companies.<br>
                                      ${estimatesHtml}
                                      ${deltaHtml}
                                      Energy Required: <strong style="color: ${hasEnergy ? 'var(--success-text)' : 'var(--danger-text)'}">${energyRequired}</strong>
@@ -1073,7 +1847,7 @@
         let assignableCompanies = 0;
         const empAvailable = parseInt(AppState.pageDetails.total_works) || 0;
         const inputAmount = parseInt(empAmount.value) || 0;
-        
+
         const empBreakdown = {};
         const rawNames = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
         const prodNames = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
@@ -1093,7 +1867,7 @@
                 if (slots > 0) {
                     availableSlots += slots;
                     assignableCompanies++;
-                    
+
                     const assignToThisComp = Math.min(remainingToSimulate, slots);
                     if (assignToThisComp > 0) {
                         simAssignments[c.id] = assignToThisComp;
@@ -1162,12 +1936,10 @@
         };
 
         Object.entries(rawProjectedEmp).forEach(([type, stats]) => {
-            if (stats.produced > 0 || stats.consumed > 0) {
-                const current = stockMap[type] || 0;
-                const final = current + stats.produced - stats.consumed;
-                const color = final >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
-                empDeltaHtml += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong style="color:${color}">${final.toFixed(2)}</strong></span><br>`;
-            }
+            const current = stockMap[type] || 0;
+            const final = current + stats.produced - stats.consumed;
+            const color = final >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
+            empDeltaHtml += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong style="color:${color}">${final.toFixed(2)}</strong></span><br>`;
         });
 
         if (availableSlots > 0) {
@@ -1215,8 +1987,27 @@
                     btnUpgrade.disabled = true;
                     upgradeSummary.textContent = `No Q${currentQ} companies found in this filter that can reach Q${targetQ}.`;
                 } else {
+                    const h = AppState.holdingsMap[holding];
+                    const hName = h ? h.name : 'Unknown';
+                    const rId = h ? h.region_id : null;
+                    const regionData = regionMap[rId] || { name: `Region ${rId}`, permalink: '#' };
+
+                    const amountToUpgrade = Math.min(parseInt(document.getElementById('upgrade-amount').value) || 1, upgradableSet.length);
+                    const sampleComp = upgradableSet[0];
+                    let totalCost = 0;
+                    if (sampleComp && sampleComp.upgrades && sampleComp.upgrades[targetQ]) {
+                        totalCost = parseInt(sampleComp.upgrades[targetQ].cost) * amountToUpgrade;
+                    }
+
                     btnUpgrade.disabled = !AppState.csrfToken;
-                    upgradeSummary.innerHTML = `Found <strong>${upgradableSet.length}</strong> companies (Q${currentQ} → Q${targetQ}).`;
+                    upgradeSummary.innerHTML = `
+                        <div style="font-size:0.6875rem; color:var(--secondary); margin-top:5px; line-height:1.5;">
+                            → Holding: <strong>${hName}</strong><br>
+                            → Region: <strong>${regionData.name}</strong><br>
+                            → Target: <strong>${amountToUpgrade} ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}</strong><br>
+                            → Est. Total Cost: <strong style="color:var(--primary)">${totalCost.toLocaleString()} Gold</strong>
+                        </div>
+                    `;
                 }
             }
         }
@@ -1282,11 +2073,11 @@
                 updateSyncMeta('csrf');
                 showToast('CSRF Token updated.', 'success');
                 return true;
-                }
-                } catch (e) { 
-                console.error('[Sync Error] CSRF:', e);
-                showToast('CSRF Sync failed.', 'error'); 
-                }        return false;
+            }
+        } catch (e) {
+            console.error('[Sync Error] CSRF:', e);
+            showToast('CSRF Sync failed.', 'error');
+        } return false;
     }
 
     async function syncInfrastructure(silent = false) {
@@ -1319,17 +2110,32 @@
                 await setDbValue('companies', companies);
                 await setDbValue('holdingCompanies', holdings);
                 await setDbValue('energyData', energy);
+
+                // Reconcile: If we have an existing inventory sync, its values are the "Truth"
+                const inv = await getDbValue('inventory');
+                if (Array.isArray(inv)) {
+                    const main = inv.find(s => s.id === 'mainStorage');
+                    if (main && main.items) {
+                        const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
+                        main.items.forEach(item => {
+                            if (rawMap[item.industryId]) {
+                                pageDetails[rawMap[item.industryId]] = item.amount;
+                            }
+                        });
+                    }
+                }
+                
                 await setDbValue('pageDetails', pageDetails);
 
                 updateSyncMeta('infrastructure');
                 await loadDataFromDb();
                 showToast(`Infrastructure synced: ${Object.keys(companies).length} companies.`, 'success');
                 return true;
-                }
-                } catch (e) { 
-                console.error('[Sync Error] Infrastructure:', e);
-                showToast('Infrastructure Sync failed.', 'error'); 
-                }        return false;
+            }
+        } catch (e) {
+            console.error('[Sync Error] Infrastructure:', e);
+            showToast('Infrastructure Sync failed.', 'error');
+        } return false;
     }
 
     async function syncWorkforce(silent = false) {
@@ -1365,11 +2171,11 @@
                 await loadDataFromDb();
                 showToast(`Workforce synced: ${employeeData.employees.length} operatives.`, 'success');
                 return true;
-                }
-                } catch (e) { 
-                console.error('[Sync Error] Workforce:', e);
-                showToast('Workforce Sync failed.', 'error'); 
-                }        return false;
+            }
+        } catch (e) {
+            console.error('[Sync Error] Workforce:', e);
+            showToast('Workforce Sync failed.', 'error');
+        } return false;
     }
 
     async function syncStorage(silent = false) {
@@ -1390,6 +2196,23 @@
             const inventory = JSON.parse(invRes);
             console.log('[Sync] Logistics Parsed:', inventory);
             await setDbValue('inventory', inventory);
+
+            // Deep Sync: Propagate stock levels to pageDetails immediately
+            if (Array.isArray(inventory)) {
+                const mainStorage = inventory.find(s => s.id === 'mainStorage');
+                if (mainStorage && mainStorage.items) {
+                    const p = await getDbValue('pageDetails') || {};
+                    const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
+                    mainStorage.items.forEach(item => {
+                        if (rawMap[item.industryId]) {
+                            p[rawMap[item.industryId]] = item.amount;
+                        }
+                    });
+                    await setDbValue('pageDetails', p);
+                    console.log('[Sync] pageDetails stocks synchronized from Inventory.');
+                }
+            }
+
             updateSyncMeta('storage');
             showToast('Logistics (Storage) synced.', 'success');
             return true;
@@ -1399,7 +2222,6 @@
         }
         return false;
     }
-
     async function syncEnergy() {
         console.log('[Sync] Fetching Vitality/Energy Data (Lightweight)...');
         try {
@@ -1432,7 +2254,62 @@
         }
         return false;
     }
-    async function updateSyncMeta(key) {
+
+    async function syncIntelligence() {
+        console.log('[Sync] Fetching Productivity Intelligence...');
+        try {
+            const uniqueRegions = new Set();
+            Object.values(AppState.holdingsMap).forEach(h => uniqueRegions.add(h.region_id));
+
+            const now = Date.now();
+            let updateCount = 0;
+
+            for (const rId of uniqueRegions) {
+                const regionData = regionMap[rId];
+                if (!regionData || !regionData.permalink) continue;
+
+                // Cache Check (1 hour)
+                const cached = AppState.productivityCache[rId];
+                if (cached && (now - cached.timestamp < 3600000)) {
+                    console.log(`[Sync] Region ${rId} (${regionData.name}) using cached data.`);
+                    continue;
+                }
+
+                console.log(`[Sync] Fetching API data for ${regionData.name}...`);
+                const apiRes = await new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url: `https://productivityapi.curlybear.eu/productivity/?permalink=${regionData.permalink}`,
+                        onload: r => (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(r.status),
+                        onerror: () => reject('NetError')
+                    });
+                });
+
+                const dataArr = JSON.parse(apiRes);
+                if (Array.isArray(dataArr) && dataArr.length > 0) {
+                    AppState.productivityCache[rId] = {
+                        timestamp: now,
+                        data: dataArr[0]
+                    };
+                    updateCount++;
+                }
+                await sleep(300); // Respectful throttle
+            }
+
+            if (updateCount > 0) {
+                await setDbValue('productivityCache', AppState.productivityCache);
+                await loadDataFromDb();
+            }
+
+            updateSyncMeta('intelligence');
+            showToast(`Intelligence updated: ${updateCount} regions refreshed.`, 'success');
+            return true;
+        } catch (e) {
+            console.error('[Sync Error] Intelligence:', e);
+            showToast('Intelligence Sync failed.', 'error');
+        }
+        return false;
+    } async function updateSyncMeta(key) {
         AppState.syncMeta.timestamps[key] = Date.now();
         await setDbValue('syncMeta', AppState.syncMeta);
         if (AppState.activeTab === 'settings') renderSettingsTab();
@@ -1448,25 +2325,29 @@
         await setDbValue('pageDetails', pageDetails);
         AppState.syncMeta.lastDay = newDay;
         await setDbValue('syncMeta', AppState.syncMeta);
+        AppState.productivityCache = {};
+        await setDbValue('productivityCache', {});
+
         await loadDataFromDb();
     }
 
     async function performGoldenLoad() {
         console.log('[Sync] Initiating Full System Re-calibration...');
         showToast('Initiating Full System Re-calibration...', 'info');
-        
+
         const results = {
             csrf: await syncCsrf(true),
             infrastructure: await syncInfrastructure(true),
             workforce: await syncWorkforce(true),
             storage: await syncStorage(true),
-            energy: await syncEnergy()
+            energy: await syncEnergy(),
+            intelligence: await syncIntelligence()
         };
 
         const failed = Object.entries(results).filter(([k, v]) => !v).map(([k]) => k);
         const successCount = Object.values(results).filter(v => v).length;
 
-        console.log(`[Sync] Full Calibration Complete. Successes: ${successCount}/5. Failed: ${failed.join(', ') || 'None'}`);
+        console.log(`[Sync] Full Calibration Complete. Successes: ${successCount}/6. Failed: ${failed.join(', ') || 'None'}`);
 
         if (failed.length === 0) {
             showToast('Full System Calibration: SUCCESS (All modules active)', 'success');
@@ -1482,10 +2363,12 @@
     // ==========================================
     async function performMassWam() {
         const holdingId = AppState.filters.holding;
-        const pendingWam = AppState.filteredArr.filter(c => !c.already_worked && !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(c.calculated_industry));
-        if (pendingWam.length === 0) return;
+        const selectedGroups = AppState.virtualList.items.filter(g => (g.wamCount || 0) > 0);
+        const totalSelected = selectedGroups.reduce((sum, g) => sum + g.wamCount, 0);
 
-        const energyRequired = pendingWam.length * 10;
+        if (totalSelected === 0) return;
+
+        const energyRequired = totalSelected * 10;
         let useEnergyBar = false;
 
         if (AppState.energyData.energy < energyRequired) {
@@ -1496,14 +2379,16 @@
             }
         }
 
-        if (!confirm(`Work as Manager in ${pendingWam.length} companies?\nThis will cost ${energyRequired} energy.`)) return;
+        const holding = AppState.holdingsMap[holdingId];
+        const hName = holding ? holding.name : 'Unknown';
+
+        if (!confirm(`Work as Manager in ${totalSelected} companies in ${hName}?\nThis will cost ${energyRequired} energy.`)) return;
 
         const btnWam = document.getElementById('btn-wam');
         btnWam.disabled = true;
 
         const doTravel = document.getElementById('chk-travel-holding').checked;
         const doReturn = document.getElementById('chk-travel-home').checked;
-        const holding = AppState.holdingsMap[holdingId];
         const targetRegionId = holding ? holding.region_id : null;
 
         try {
@@ -1526,7 +2411,26 @@
             }
 
             btnWam.textContent = 'Working...';
-            const companyIds = pendingWam.map(c => c.id);
+
+            // Collect individual company IDs based on group selections
+            const companyIds = [];
+            const affectedCompanies = [];
+            selectedGroups.forEach(group => {
+                const companiesInGroup = AppState.filteredArr.filter(c => {
+                    const hId = c.holding_company_id || 'unassigned';
+                    const ind = c.calculated_industry || 'unknown';
+                    const q = c.calculated_quality || '1';
+                    const key = `${hId}_${ind}_${q}`;
+                    return key === group.key && !c.already_worked;
+                });
+
+                const toTake = companiesInGroup.slice(0, group.wamCount);
+                toTake.forEach(c => {
+                    companyIds.push(c.id);
+                    affectedCompanies.push(c);
+                });
+            });
+
             const urlEncodedIds = encodeURIComponent(JSON.stringify(companyIds));
             let payload = `own_work=${urlEncodedIds}&employee_works=%7B%7D&cntOwnWork=${companyIds.length}&cntEmployeeWork=0&cntSelected=${companyIds.length}&action_type=production&_token=${AppState.csrfToken}`;
             if (useEnergyBar) payload += '&useEnergyBar=yes';
@@ -1536,16 +2440,60 @@
 
             if (res.status === true) {
                 AppState.energyData.energy = Math.max(0, AppState.energyData.energy - energyRequired);
-                pendingWam.forEach(c => c.already_worked = true);
+                affectedCompanies.forEach(c => c.already_worked = true);
 
                 await setDbValue('energyData', AppState.energyData);
+
+                // Recalculate projections for the EFFECTIVE selection to update raws accurately
+                const typeMap = {}; // industry -> {p, c}
+                affectedCompanies.forEach(c => {
+                    const fname = c.building_img.split('/').pop();
+                    const def = companyDefinitions[fname];
+                    if (def && def.baseProduction) {
+                        const amount = def.baseProduction * (parseFloat(c.effective_bonus) || 100) / 100;
+                        const ind = def.industry;
+                        if (!typeMap[ind]) typeMap[ind] = { p: 0, c: 0 };
+                        typeMap[ind].p += amount;
+                        if (!ind.endsWith('_raw') && def.rawCost) typeMap[ind].c += (amount * def.rawCost);
+                    }
+                });
+
+                const rawNamesShorthand = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
+                const p = AppState.pageDetails;
+                const typeToId = { 'FRM': 7, 'WRM': 12, 'HRM': 17, 'ARM': 24 };
+                const deltas = {};
+
+                Object.entries(typeMap).forEach(([ind, stats]) => {
+                    const rName = rawNamesShorthand[ind.replace('_raw', '')];
+                    const delta = stats.p - stats.c;
+                    if (delta !== 0) {
+                        deltas[rName] = (deltas[rName] || 0) + delta;
+                        if (rName === 'FRM') p.food_raw_stock = (p.food_raw_stock || 0) + delta;
+                        if (rName === 'WRM') p.weapon_raw_stock = (p.weapon_raw_stock || 0) + delta;
+                        if (rName === 'HRM') p.house_raw_stock = (p.house_raw_stock || 0) + delta;
+                        if (rName === 'ARM') p.airplane_raw_stock = (p.airplane_raw_stock || 0) + delta;
+                    }
+                });
+                await setDbValue('pageDetails', p);
+
+                const inv = await getDbValue('inventory');
+                if (Array.isArray(inv)) {
+                    const main = inv.find(s => s.id === 'mainStorage');
+                    if (main && main.items) {
+                        Object.entries(deltas).forEach(([type, delta]) => {
+                            const item = main.items.find(i => i.industryId === typeToId[type]);
+                            if (item) item.amount += delta;
+                        });
+                        await setDbValue('inventory', inv);
+                    }
+                }
+
                 const fullCompanies = await getDbValue('companies');
-                pendingWam.forEach(c => { if (fullCompanies[c.id]) fullCompanies[c.id].already_worked = true; });
+                affectedCompanies.forEach(c => { if (fullCompanies[c.id]) fullCompanies[c.id].already_worked = true; });
                 await setDbValue('companies', fullCompanies);
             } else {
                 throw new Error('API returned an error: ' + JSON.stringify(res));
             }
-
             if (doReturn && residenceRegionId) {
                 const tdResReturn = await apiPost('https://www.erepublik.com/en/main/travelData', `_token=${AppState.csrfToken}&holdingId=0&battleId=0&regionId=${residenceRegionId}`);
                 const tdReturn = JSON.parse(tdResReturn);
@@ -1616,6 +2564,60 @@
             return;
         }
 
+        // Detailed Confirmation (Recalculate breakdown locally for the confirmation msg)
+        const empBreakdownLocal = {};
+        const rawNames = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
+        const prodNames = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
+        const rawProjectedEmpLocal = {
+            FRM: { produced: 0, consumed: 0 },
+            WRM: { produced: 0, consumed: 0 },
+            HRM: { produced: 0, consumed: 0 },
+            ARM: { produced: 0, consumed: 0 }
+        };
+
+        affectedCompanies.forEach(({ obj, amount: assignToThisComp }) => {
+            const fname = obj.building_img.split('/').pop();
+            const def = companyDefinitions[fname];
+            if (def && def.baseProduction) {
+                const prodPerEmp = def.baseProduction * (parseFloat(obj.effective_bonus) || 100) / 100;
+                const totalCompProd = prodPerEmp * assignToThisComp;
+                const industry = def.industry;
+                const isRaw = industry.endsWith('_raw');
+
+                if (isRaw) {
+                    const rawType = rawNames[industry.replace('_raw', '')];
+                    rawProjectedEmpLocal[rawType].produced += totalCompProd;
+                    if (!empBreakdownLocal[industry]) empBreakdownLocal[industry] = { prod: 0, cons: 0, label: rawType, rawType };
+                    empBreakdownLocal[industry].prod += totalCompProd;
+                } else {
+                    const rawType = rawNames[industry];
+                    const key = `${industry}_q${obj.quality}`;
+                    if (!empBreakdownLocal[key]) empBreakdownLocal[key] = { prod: 0, cons: 0, label: `Q${obj.quality} ${prodNames[industry]}`, rawType };
+                    empBreakdownLocal[key].prod += totalCompProd;
+                    if (def.rawCost) {
+                        const cons = totalCompProd * def.rawCost;
+                        empBreakdownLocal[key].cons += cons;
+                        rawProjectedEmpLocal[rawType].consumed += cons;
+                    }
+                }
+            }
+        });
+
+        let confirmMsg = `Assign and work ${amount - left} employees in ${companyCount} companies?\n\nProjections:\n`;
+        Object.values(empBreakdownLocal).forEach(t => {
+            if (t.prod > 0) {
+                confirmMsg += `- ${t.label}: ${t.prod.toFixed(2)} units`;
+                if (t.cons > 0) confirmMsg += ` (Uses ${t.cons.toFixed(2)} ${t.rawType})`;
+                confirmMsg += '\n';
+            }
+        });
+
+        if (!confirm(confirmMsg)) {
+            btnAssign.disabled = false;
+            btnAssign.textContent = 'Assign & Work';
+            return;
+        }
+
         const employeeWorksEncoded = encodeURIComponent(JSON.stringify(employee_works));
         const payload = `own_work=%5B%5D&employee_works=${employeeWorksEncoded}&cntOwnWork=0&cntEmployeeWork=${companyCount}&cntSelected=${companyCount}&action_type=production&_token=${AppState.csrfToken}`;
 
@@ -1633,6 +2635,36 @@
                     }
                 });
                 await setDbValue('companies', fullCompanies);
+
+                // Update Raws in pageDetails using the local projection
+                const p = AppState.pageDetails;
+                const typeToId = { 'FRM': 7, 'WRM': 12, 'HRM': 17, 'ARM': 24 };
+                const deltas = {};
+
+                Object.entries(rawProjectedEmpLocal).forEach(([type, stats]) => {
+                    if (stats.produced > 0 || stats.consumed > 0) {
+                        const delta = stats.produced - stats.consumed;
+                        deltas[type] = delta;
+                        if (type === 'FRM') p.food_raw_stock = (p.food_raw_stock || 0) + delta;
+                        if (type === 'WRM') p.weapon_raw_stock = (p.weapon_raw_stock || 0) + delta;
+                        if (type === 'HRM') p.house_raw_stock = (p.house_raw_stock || 0) + delta;
+                        if (type === 'ARM') p.airplane_raw_stock = (p.airplane_raw_stock || 0) + delta;
+                    }
+                });
+                await setDbValue('pageDetails', p);
+
+                // Sync with Inventory in DB to prevent stale overwrites in loadDataFromDb
+                const inv = await getDbValue('inventory');
+                if (Array.isArray(inv)) {
+                    const main = inv.find(s => s.id === 'mainStorage');
+                    if (main && main.items) {
+                        Object.entries(deltas).forEach(([type, delta]) => {
+                            const item = main.items.find(i => i.industryId === typeToId[type]);
+                            if (item) item.amount += delta;
+                        });
+                        await setDbValue('inventory', inv);
+                    }
+                }
 
                 amountInput.value = 0;
                 await loadDataFromDb();
@@ -1674,7 +2706,23 @@
             totalCost += parseInt(levelData.cost);
         });
 
-        if (!confirm(`Upgrade ${toUpgrade.length} companies to Q${targetQ}?\nEstimated Total Cost: ${totalCost} Gold.`)) return;
+        const holdingId = AppState.filters.holding;
+        const h = AppState.holdingsMap[holdingId];
+        const hName = h ? h.name : 'Unknown';
+        const rId = h ? h.region_id : null;
+        const regionData = regionMap[rId] || { name: `Region ${rId}`, permalink: '#' };
+        const industry = AppState.filters.industry;
+        const currentQ = AppState.filters.quality;
+
+        const confirmMsg = `MASS UPGRADE COMMAND\n\n` +
+            `→ Holding: ${hName}\n` +
+            `→ Region: ${regionData.name} (ID: ${rId})\n\n` +
+            `Action: Upgrade ${toUpgrade.length} ${formatIndustryName(industry)} companies\n` +
+            `Level: Q${currentQ} → Q${targetQ}\n` +
+            `Total Cost: ${totalCost.toLocaleString()} Gold\n\n` +
+            `Confirm high-value transaction?`;
+
+        if (!confirm(confirmMsg)) return;
 
         const btn = document.getElementById('btn-mass-upgrade');
         btn.disabled = true;
@@ -1728,11 +2776,11 @@
             successIds.forEach(id => {
                 const comp = fullCompanies[id];
                 if (!comp) return;
-                
+
                 const targetLvlData = comp.upgrades ? comp.upgrades[targetQ] : null;
-                
+
                 comp.quality = targetQ;
-                
+
                 // 1. Update Images (Crucial for filter logic)
                 if (comp.building_img) {
                     comp.building_img = comp.building_img.replace(/q\d\.png/, `q${targetQ}.png`);
@@ -1850,7 +2898,25 @@
         }, 4000);
     }
 
+    // ==========================================
+    // 10. NAVIGATION INJECTION
+    // ==========================================
+    function injectNavigationLink() {
+        if (window.location.pathname.startsWith(CUSTOM_URL)) return;
+        const menu = document.querySelector("#menu2 > ul");
+        if (!menu) return;
+        if (menu.querySelector(`a[href="${CUSTOM_URL}"]`)) return;
+
+        const companiesLink = menu.querySelector('a[href="/en/economy/myCompanies"]');
+        if (companiesLink && companiesLink.parentElement) {
+            const li = document.createElement('li');
+            li.innerHTML = `<a href="${CUSTOM_URL}">Custom company manager</a>`;
+            companiesLink.parentElement.insertAdjacentElement('afterend', li);
+        }
+    }
+
     // Start
+    injectNavigationLink();
     initCustomManager();
 
 })();
