@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.2
+// @version      0.4
 // @description  High-performance, custom "Company Manager plus" dashboard.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -20,6 +20,10 @@
     const DB_NAME = 'eRepCustomManagerDB';
     const DB_VERSION = 1;
     const CUSTOM_URL = '/en/economy/custom-manager';
+    const NON_WAMMABLE_INDUSTRIES = new Set(['house', 'house_raw', 'aircraft', 'aircraft_raw']);
+    const RAW_NAMES  = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
+    const PROD_NAMES = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
+    const TYCOON_BUFFER_SECONDS = 60; // Safety margin: treat pack as expired this many seconds early
 
     const regionMap = {
         3: { name: "Dobrogea", permalink: "Dobrogea" },
@@ -698,7 +702,11 @@
         productivityCache: {},
         tycoonBonus: 0,
         tycoonUntil: 0,
-        wamSelections: {}
+        wamSelections: {},
+        employeeWorkPool: null,          // running pool; null = no baseline (infra sync required)
+        lastKnownWorksReceivedDay: null, // game day of last workforce sync
+        lastKnownWorksReceived: 0,       // worksReceived seen on that day
+        lastTycoonUntilForBonus: 0       // tycoonUntil for which +150 was already deposited
     };
 
     // ==========================================
@@ -819,7 +827,154 @@
         });
     }
 
+    async function apiGet(url, headers = {}) {
+        console.log(`[API GET Request] URL: ${url}`);
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                headers: headers,
+                onload: function (r) {
+                    console.log(`[API GET Response] URL: ${url} Status: ${r.status}`);
+                    (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject('Fail: ' + r.status);
+                },
+                onerror: function (err) {
+                    console.error(`[API GET Error] URL: ${url}`, err);
+                    reject('Network error.');
+                }
+            });
+        });
+    }
+
     const sleep = ms => new Promise(res => setTimeout(res, ms));
+
+    // entries: Array of { def, quality, totalProd }
+    // Returns { breakdown, rawProjected } for display and stock-delta logic.
+    function computeProductionEstimate(entries) {
+        const breakdown = {};
+        const rawProjected = {
+            FRM: { produced: 0, consumed: 0 },
+            WRM: { produced: 0, consumed: 0 },
+            HRM: { produced: 0, consumed: 0 },
+            ARM: { produced: 0, consumed: 0 }
+        };
+
+        for (const { def, quality, totalProd } of entries) {
+            if (!def || totalProd <= 0) continue;
+            const industry = def.industry;
+            const isRaw = industry.endsWith('_raw');
+
+            if (isRaw) {
+                const rawType = RAW_NAMES[industry.replace('_raw', '')];
+                rawProjected[rawType].produced += totalProd;
+                if (!breakdown[industry]) breakdown[industry] = { prod: 0, cons: 0, label: rawType, rawType };
+                breakdown[industry].prod += totalProd;
+            } else {
+                const rawType = RAW_NAMES[industry];
+                const key = `${industry}_q${quality}`;
+                if (!breakdown[key]) breakdown[key] = { prod: 0, cons: 0, label: `Q${quality} ${PROD_NAMES[industry]}`, rawType };
+                breakdown[key].prod += totalProd;
+                if (def.rawCost) {
+                    const cons = totalProd * def.rawCost;
+                    breakdown[key].cons += cons;
+                    rawProjected[rawType].consumed += cons;
+                }
+            }
+        }
+
+        return { breakdown, rawProjected };
+    }
+
+    // Returns Tycoon Pack status relative to now, applying TYCOON_BUFFER_SECONDS margin.
+    function getTycoonStatus() {
+        const now = Math.floor(Date.now() / 1000);
+        const effectiveExpiry = AppState.tycoonUntil - TYCOON_BUFFER_SECONDS;
+        const remaining = effectiveExpiry - now;
+        return {
+            isActive: remaining > 0,
+            remainingSeconds: Math.max(0, remaining),
+            isCritical: remaining > 0 && remaining < 43200 // < 12 hours
+        };
+    }
+
+    // Formats a duration in seconds as "Xd Xh Xm Xs", dropping leading zero units.
+    function formatCountdown(seconds) {
+        const d = Math.floor(seconds / 86400);
+        const h = Math.floor((seconds % 86400) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        return [d && `${d}d`, h && `${h}h`, m && `${m}m`, `${s}s`].filter(Boolean).join(' ');
+    }
+
+    // Renders the Tycoon Pack countdown into #tycoon-display.
+    function updateTycoonDisplay() {
+        const el = document.getElementById('tycoon-display');
+        if (!el) return;
+        if (!AppState.tycoonBonus) {
+            el.textContent = 'Tycoon: Inactive';
+            el.style.color = 'var(--on-surface-variant)';
+            return;
+        }
+        const { isActive, remainingSeconds, isCritical } = getTycoonStatus();
+        if (!isActive) {
+            el.textContent = 'Tycoon: Inactive';
+            el.style.color = 'var(--on-surface-variant)';
+            return;
+        }
+        const countdown = formatCountdown(remainingSeconds);
+        if (isCritical) {
+            el.innerHTML = `⚠ Tycoon: +${AppState.tycoonBonus}% — ${countdown}`;
+            el.style.color = '#ff4444';
+        } else {
+            el.textContent = `Tycoon: +${AppState.tycoonBonus}% — ${countdown}`;
+            el.style.color = 'var(--secondary)';
+        }
+    }
+
+    // Current raw stock levels from AppState — used by estimate renderers and delta logic.
+    function getStockMap() {
+        return {
+            FRM: AppState.pageDetails.food_raw_stock || 0,
+            WRM: AppState.pageDetails.weapon_raw_stock || 0,
+            HRM: AppState.pageDetails.house_raw_stock || 0,
+            ARM: AppState.pageDetails.airplane_raw_stock || 0
+        };
+    }
+
+    // Returns true if the game responded with a captcha challenge.
+    // The script cannot solve captchas — caller must surface this to the user and abort.
+    function isCaptchaResponse(res) {
+        return res && res.status === false && res.message === 'captcha';
+    }
+
+    // Returns { value, ready }. ready=false means no baseline yet (infra sync required).
+    // All UI code must use this instead of reading pageDetails.total_works directly.
+    function getEmployeeWorkPool() {
+        if (AppState.employeeWorkPool === null) return { value: null, ready: false };
+        return { value: AppState.employeeWorkPool, ready: true };
+    }
+
+    // Returns { html, hasNegativeBalance } — negative balance spans get pulse animation class.
+    function renderEstimateHtml(breakdown, rawProjected, stockMap) {
+        let html = '';
+        let hasNegativeBalance = false;
+        Object.values(breakdown).forEach(t => {
+            if (t.prod > 0) {
+                const consLine = t.cons > 0 ? ` (Uses ${t.cons.toFixed(2)} ${t.rawType})` : '';
+                html += `Est. ${t.label}: <strong>${t.prod.toFixed(2)}</strong>${consLine}<br>`;
+            }
+        });
+        Object.entries(rawProjected).forEach(([type, stats]) => {
+            const current = (stockMap && stockMap[type]) || 0;
+            const final = current + stats.produced - stats.consumed;
+            const isNeg = final < 0;
+            if (isNeg) hasNegativeBalance = true;
+            const color = isNeg ? 'var(--danger-text)' : 'var(--success-text)';
+            const pulseClass = isNeg ? ' class="balance-neg-pulse"' : '';
+            html += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong${pulseClass} style="color:${color}">${Math.floor(final).toLocaleString()}</strong></span><br>`;
+        });
+        return { html, hasNegativeBalance };
+    }
 
     // ==========================================
     // 5. CORE LOGIC & UI BUILDER
@@ -991,13 +1146,19 @@
                     from { transform: translateX(100%); opacity: 0; }
                     to { transform: translateX(0); opacity: 1; }
                 }
+                @keyframes balance-pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.35; }
+                }
+                .balance-neg-pulse {
+                    animation: balance-pulse 1s ease-in-out infinite;
+                }
                 .toast.fade-out {
                     opacity: 0; transform: translateX(100%);
                     transition: opacity 0.3s, transform 0.3s;
                 }
 
-                .col-name { width: 30%; }
-                .col-q { width: 10%; }
+                .col-name { width: 40%; }
                 .col-emp { width: 15%; }
                 .col-hold { width: 25%; }
                 .col-stat { width: 20%; }
@@ -1117,12 +1278,13 @@
                         <hr style="border-color: var(--border); margin: 20px 0;" />
                         <h3 style="margin-top:0">Employee Assignment</h3>
                         <p class="summary" id="assign-summary">Filter above to find target companies.</p>
-                        <div class="form-group" style="display:flex; gap:10px; align-items:flex-end;">
-                            <div style="flex:1;">
-                                <label>Employees to Assign</label>
-                                <input type="number" id="emp-amount" class="form-control" value="0" min="0" />
+                        <div class="form-group">
+                            <label>Employees to Assign</label>
+                            <input type="number" id="emp-amount" class="form-control" value="0" min="0" />
+                            <div style="display:flex; gap:10px; margin-top:8px;">
+                                <button id="btn-use-max-emp" class="btn" style="flex:1;" disabled>Use Max</button>
+                                <button id="btn-assign" class="btn" style="flex:2;" disabled>Assign & Work</button>
                             </div>
-                            <button id="btn-assign" class="btn" disabled>Assign & Work</button>
                         </div>
                         
                         <hr style="border-color: var(--border); margin: 20px 0;" />
@@ -1167,7 +1329,6 @@
                             <h3 style="margin-top:0">Holdings Summary (<span id="count-display">0</span> Companies)</h3>
                             <div class="header-row">
                                 <div class="col-name">Industry</div>
-                                <div class="col-q">Quality</div>
                                 <div class="col-emp">Employees</div>
                                 <div class="col-hold">Holding</div>
                                 <div class="col-stat">Status</div>
@@ -1253,7 +1414,7 @@
 
                 // Distribute greedily from top down
                 items.forEach(group => {
-                    const isWammable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(group.industry);
+                    const isWammable = !NON_WAMMABLE_INDUSTRIES.has(group.industry);
                     if (!isWammable || group.pending <= 0) {
                         group.wamCount = 0;
                         return;
@@ -1284,6 +1445,11 @@
         });
 
         document.getElementById('btn-assign').addEventListener('click', performEmployeeAssignment);
+        document.getElementById('btn-use-max-emp').addEventListener('click', () => {
+            const empAmount = document.getElementById('emp-amount');
+            empAmount.value = empAmount.max || 0;
+            empAmount.dispatchEvent(new Event('input'));
+        });
         document.getElementById('emp-amount').addEventListener('input', updateActionUI);
 
         document.getElementById('upgrade-target-q').addEventListener('change', updateActionUI); document.getElementById('upgrade-amount').addEventListener('input', updateActionUI);
@@ -1322,6 +1488,19 @@
 
         document.title = "Custom Company Manager";
 
+        // Live countdown for Tycoon Pack. Stored on AppState for future teardown.
+        AppState.tycoonInterval = setInterval(() => {
+            const el = document.getElementById('tycoon-display');
+            if (!el) return;
+            if (AppState.tycoonBonus > 0 && !getTycoonStatus().isActive) {
+                // Buffer window elapsed — treat as expired without waiting for next sync
+                AppState.tycoonBonus = 0;
+                AppState.tycoonUntil = 0;
+                applyFilters();
+            }
+            updateTycoonDisplay();
+        }, 1000);
+
         autoSync();
     }
 
@@ -1329,6 +1508,7 @@
     // 6. DATA LOADING & FILTERING
     // ==========================================
     async function loadDataFromDb() {
+        const previousTycoonUntil = AppState.tycoonUntil;
         const companies = await getDbValue('companies') || {};
         const holdings = await getDbValue('holdingCompanies') || {};
         const inventory = await getDbValue('inventory') || {};
@@ -1352,6 +1532,13 @@
 
         AppState.productivityCache = await getDbValue('productivityCache') || {};
 
+        // Work Pool state
+        const poolVal = await getDbValue('employeeWorkPool');
+        AppState.employeeWorkPool = (poolVal !== undefined && poolVal !== null) ? poolVal : null;
+        AppState.lastKnownWorksReceivedDay = (await getDbValue('lastKnownWorksReceivedDay')) ?? null;
+        AppState.lastKnownWorksReceived = (await getDbValue('lastKnownWorksReceived')) || 0;
+        AppState.lastTycoonUntilForBonus = (await getDbValue('lastTycoonUntilForBonus')) || 0;
+
         // 1. Unify Raw Material Stocks
         if (Array.isArray(inventory)) {
             const mainStorage = inventory.find(s => s.id === 'mainStorage');
@@ -1362,6 +1549,10 @@
                         AppState.pageDetails[rawMap[item.industryId]] = item.amount;
                     }
                 });
+                if (mainStorage.status) {
+                    AppState.pageDetails.storage_used = mainStorage.status.usedStorage || 0;
+                    AppState.pageDetails.storage_total = mainStorage.status.totalStorage || 0;
+                }
             }
 
             // 2. Detect Tycoon Pack Bonus
@@ -1385,7 +1576,7 @@
             }
         }
 
-        // 3. Expiration Check
+        // 3. Expiration Check — hard reset when fully expired (buffer not applied here)
         const nowSec = Math.floor(Date.now() / 1000);
         if (AppState.tycoonUntil > 0 && nowSec > AppState.tycoonUntil) {
             console.log('[Tycoon] Bonus expired. Resetting.');
@@ -1393,11 +1584,21 @@
             AppState.tycoonUntil = 0;
         }
 
-        // Update Header UI
-        const tycoonDisp = document.getElementById('tycoon-display');
-        if (tycoonDisp) {
-            tycoonDisp.textContent = AppState.tycoonBonus > 0 ? `Tycoon active: +${AppState.tycoonBonus}%` : '';
+        // 4. Tycoon Activation — deposit +150 works once per new activation (between infra syncs)
+        const wasInactive = previousTycoonUntil < nowSec || previousTycoonUntil === 0;
+        const isNowActive = AppState.tycoonUntil > nowSec;
+        const isNewActivation = wasInactive && isNowActive && AppState.lastTycoonUntilForBonus !== AppState.tycoonUntil;
+        if (isNewActivation && AppState.employeeWorkPool !== null) {
+            AppState.employeeWorkPool += 150;
+            await setDbValue('employeeWorkPool', AppState.employeeWorkPool);
+            AppState.lastTycoonUntilForBonus = AppState.tycoonUntil;
+            await setDbValue('lastTycoonUntilForBonus', AppState.lastTycoonUntilForBonus);
+            console.log(`[WorkPool] +150 Tycoon Pack bonus deposited. Pool: ${AppState.employeeWorkPool}`);
+            showToast('Tycoon Pack activated: +150 works added to your pool.', 'success');
         }
+
+        // Update Header UI (interval keeps this live; this is the initial render on data load)
+        updateTycoonDisplay();
 
         AppState.companiesArr = Object.values(companies);
         AppState.holdingsMap = holdings;
@@ -1421,6 +1622,7 @@
 
     function applyFilters() {
         const { holding, industry, quality, productivity } = AppState.filters;
+        const tycoonAdd = getTycoonStatus().isActive ? AppState.tycoonBonus : 0;
 
         AppState.filteredArr = AppState.companiesArr.filter(c => {
             let fname = '';
@@ -1456,10 +1658,10 @@
                     apiVal = d[field] || 1;
                 }
 
-                c.effective_bonus = (apiVal * 100) + AppState.tycoonBonus;
+                c.effective_bonus = (apiVal * 100) + tycoonAdd;
             } else {
                 // Base + Tycoon if no API data
-                c.effective_bonus = (c.effective_bonus || 100) + AppState.tycoonBonus;
+                c.effective_bonus = (c.effective_bonus || 100) + tycoonAdd;
             }
 
             let passHolding = true;
@@ -1519,7 +1721,7 @@
 
         // Restore WAM selections from state or initialize to max pending
         aggregatedArr.forEach(group => {
-            const isWammable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(group.industry);
+            const isWammable = !NON_WAMMABLE_INDUSTRIES.has(group.industry);
             if (isWammable) {
                 // Use stored selection if it exists, otherwise default to all pending
                 if (typeof AppState.wamSelections[group.key] !== 'undefined') {
@@ -1668,7 +1870,7 @@
 
     function renderCompanyRow(comp) {
         let statusStr = '';
-        const isWammable = !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(comp.industry);
+        const isWammable = !NON_WAMMABLE_INDUSTRIES.has(comp.industry);
 
         if (comp.worked > 0) statusStr += `<span class="status-chip chip-success" style="margin-right:2px">${comp.worked} Worked</span>`;
 
@@ -1704,162 +1906,98 @@
             <td class="col-name">
                 <div style="display:flex; flex-direction:column; justify-content:center;">
                     <div style="display:flex; align-items:center; gap:5px;">
-                        <strong style="color:var(--text-main)">${formatIndustryName(comp.industry)}</strong>
+                        <strong style="color:var(--text-main)">Q${comp.quality} ${formatIndustryName(comp.industry)}</strong>
                         <span style="color:var(--on-surface-variant)">x${comp.count}</span>
                     </div>
                     <span style="font-size:0.625rem; color:var(--secondary); font-weight:500;">Productivity: ${parseFloat(comp.productivity).toFixed(2)}%</span>
                 </div>
             </td>
-            <td class="col-q">Q${comp.quality}</td>
             <td class="col-emp">${empStr}</td>
             <td class="col-hold">${comp.holding_name}</td>
             <td class="col-stat">${statusStr}</td>
         </tr>`;
     }
 
-    function updateActionUI() {
+    function updateWamUI() {
         const btnWam = document.getElementById('btn-wam');
         const summary = document.getElementById('action-summary');
         const wamContainer = document.getElementById('wam-selector-container');
         const wamSlider = document.getElementById('wam-slider');
         const wamCountLabel = document.getElementById('wam-selected-count');
-        const btnAssign = document.getElementById('btn-assign');
-        const assignSummary = document.getElementById('assign-summary');
-        const empAmount = document.getElementById('emp-amount');
-        const btnUpgrade = document.getElementById('btn-mass-upgrade');
-        const upgradeSummary = document.getElementById('upgrade-summary');
 
-        const { holding, industry } = AppState.filters;
+        const { holding } = AppState.filters;
         if (holding === 'all' || holding === 'unassigned') {
             btnWam.disabled = true;
             summary.textContent = 'Select a specific holding to enable Work as Manager.';
             if (wamContainer) wamContainer.style.display = 'none';
-        } else {
-            if (wamContainer) wamContainer.style.display = 'block';
-
-            // 1. Calculate Selection Stats
-            const workableGroups = AppState.virtualList.items.filter(g =>
-                !['house', 'house_raw', 'aircraft', 'aircraft_raw'].includes(g.industry) && g.pending > 0
-            );
-
-            const totalWorkable = workableGroups.reduce((sum, g) => sum + g.pending, 0);
-            const currentSelected = workableGroups.reduce((sum, g) => sum + (g.wamCount || 0), 0);
-
-            if (wamSlider) {
-                wamSlider.max = totalWorkable;
-                if (parseInt(wamSlider.value) !== currentSelected) {
-                    wamSlider.value = currentSelected;
-                }
-            }
-            if (wamCountLabel) wamCountLabel.textContent = currentSelected;
-
-            if (currentSelected === 0) {
-                btnWam.disabled = true;
-                summary.textContent = totalWorkable > 0 ? 'Select companies using the slider or table inputs to work.' : 'No pending workable companies in this holding/filter combination.';
-            } else {
-                const energyRequired = currentSelected * 10;
-                const hasEnergy = (AppState.energyData.energy >= energyRequired);
-
-                // Production & Raw estimates for EFFECTIVE selection
-                const breakdown = {};
-                const rawNames = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
-                const prodNames = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
-                const rawProjected = {
-                    FRM: { produced: 0, consumed: 0 },
-                    WRM: { produced: 0, consumed: 0 },
-                    HRM: { produced: 0, consumed: 0 },
-                    ARM: { produced: 0, consumed: 0 }
-                };
-
-                workableGroups.forEach(group => {
-                    const count = group.wamCount || 0;
-                    if (count <= 0) return;
-
-                    const sample = AppState.filteredArr.find(c => {
-                        const fname = c.building_img.split('/').pop();
-                        const def = companyDefinitions[fname];
-                        return def && def.industry === group.industry && def.quality === `q${group.quality}`;
-                    });
-
-                    if (sample) {
-                        const fname = sample.building_img.split('/').pop();
-                        const def = companyDefinitions[fname];
-                        const amountPerWork = def.baseProduction * (parseFloat(sample.effective_bonus) || 100) / 100;
-                        const industry = group.industry;
-                        const isRaw = industry.endsWith('_raw');
-
-                        if (isRaw) {
-                            const rawType = rawNames[industry.replace('_raw', '')];
-                            rawProjected[rawType].produced += (amountPerWork * count);
-                            if (!breakdown[industry]) breakdown[industry] = { prod: 0, cons: 0, label: rawType, rawType };
-                            breakdown[industry].prod += (amountPerWork * count);
-                        } else {
-                            const rawType = rawNames[industry];
-                            const key = `${industry}_q${group.quality}`;
-                            if (!breakdown[key]) breakdown[key] = { prod: 0, cons: 0, label: `Q${group.quality} ${prodNames[industry]}`, rawType };
-                            breakdown[key].prod += (amountPerWork * count);
-                            if (def.rawCost) {
-                                const cons = (amountPerWork * count) * def.rawCost;
-                                breakdown[key].cons += cons;
-                                rawProjected[rawType].consumed += cons;
-                            }
-                        }
-                    }
-                });
-
-                let estimatesHtml = '';
-                Object.values(breakdown).forEach(t => {
-                    if (t.prod > 0) {
-                        const consLine = t.cons > 0 ? ` (Uses ${t.cons.toFixed(2)} ${t.rawType})` : '';
-                        estimatesHtml += `Est. ${t.label}: <strong>${t.prod.toFixed(2)}</strong>${consLine}<br>`;
-                    }
-                });
-
-                // Delta Logic (Produced + Stock - Consumed)
-                let deltaHtml = '';
-                const stockMap = {
-                    'FRM': AppState.pageDetails.food_raw_stock || 0,
-                    'WRM': AppState.pageDetails.weapon_raw_stock || 0,
-                    'HRM': AppState.pageDetails.house_raw_stock || 0,
-                    'ARM': AppState.pageDetails.airplane_raw_stock || 0
-                };
-
-                Object.entries(rawProjected).forEach(([type, stats]) => {
-                    const current = stockMap[type] || 0;
-                    const final = current + stats.produced - stats.consumed;
-                    const color = final >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
-                    deltaHtml += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong style="color:${color}">${final.toFixed(2)}</strong></span><br>`;
-                });
-
-                summary.innerHTML = `Selection: <strong>${currentSelected}</strong> companies.<br>
-                                     ${estimatesHtml}
-                                     ${deltaHtml}
-                                     Energy Required: <strong style="color: ${hasEnergy ? 'var(--success-text)' : 'var(--danger-text)'}">${energyRequired}</strong>
-                                     ${!hasEnergy ? ' <span style="font-size:0.65rem; color:var(--on-surface-variant)">(Requires Energy Bars)</span>' : ''}`;
-
-                btnWam.disabled = !AppState.csrfToken;
-                if (!AppState.csrfToken) summary.innerHTML += '<br><span style="color:var(--danger-text)">No CSRF Token. Please Sync.</span>';
-            }
+            return;
         }
 
-        // Employee Assignment UI
+        if (wamContainer) wamContainer.style.display = 'block';
+
+        const workableGroups = AppState.virtualList.items.filter(g =>
+            !NON_WAMMABLE_INDUSTRIES.has(g.industry) && g.pending > 0
+        );
+        const totalWorkable = workableGroups.reduce((sum, g) => sum + g.pending, 0);
+        const currentSelected = workableGroups.reduce((sum, g) => sum + (g.wamCount || 0), 0);
+
+        if (wamSlider) {
+            wamSlider.max = totalWorkable;
+            if (parseInt(wamSlider.value) !== currentSelected) wamSlider.value = currentSelected;
+        }
+        if (wamCountLabel) wamCountLabel.textContent = currentSelected;
+
+        if (currentSelected === 0) {
+            btnWam.disabled = true;
+            summary.textContent = totalWorkable > 0
+                ? 'Select companies using the slider or table inputs to work.'
+                : 'No pending workable companies in this holding/filter combination.';
+            return;
+        }
+
+        const energyRequired = currentSelected * 10;
+        const hasEnergy = AppState.energyData.energy >= energyRequired;
+
+        const wamEntries = workableGroups
+            .filter(group => (group.wamCount || 0) > 0)
+            .map(group => {
+                const sample = AppState.filteredArr.find(c => {
+                    const fname = c.building_img.split('/').pop();
+                    const def = companyDefinitions[fname];
+                    return def && def.industry === group.industry && def.quality === `q${group.quality}`;
+                });
+                if (!sample) return null;
+                const def = companyDefinitions[sample.building_img.split('/').pop()];
+                const amountPerWork = def.baseProduction * (parseFloat(sample.effective_bonus) || 100) / 100;
+                return { def, quality: group.quality, totalProd: amountPerWork * (group.wamCount || 0) };
+            })
+            .filter(Boolean);
+        const { breakdown, rawProjected } = computeProductionEstimate(wamEntries);
+        const { html: estimatesHtml, hasNegativeBalance: wamNegBalance } = renderEstimateHtml(breakdown, rawProjected, getStockMap());
+
+        summary.innerHTML = `Selection: <strong>${currentSelected}</strong> companies.<br>
+                             ${estimatesHtml}
+                             Energy Required: <strong style="color: ${hasEnergy ? 'var(--success-text)' : 'var(--danger-text)'}">${energyRequired}</strong>
+                             ${!hasEnergy ? ' <span style="font-size:0.65rem; color:var(--on-surface-variant)">(Requires Energy Bars)</span>' : ''}`;
+        btnWam.disabled = !AppState.csrfToken || wamNegBalance;
+        if (!AppState.csrfToken) summary.innerHTML += '<br><span style="color:var(--danger-text)">No CSRF Token. Please Sync.</span>';
+        if (wamNegBalance) summary.innerHTML += '<br><span style="color:var(--danger-text); font-size:0.65rem;">Insufficient raw materials.</span>';
+    }
+
+    function updateAssignUI() {
+        const btnAssign = document.getElementById('btn-assign');
+        const assignSummary = document.getElementById('assign-summary');
+        const empAmount = document.getElementById('emp-amount');
+
         let availableSlots = 0;
         let assignableCompanies = 0;
-        const empAvailable = parseInt(AppState.pageDetails.total_works) || 0;
+        // total_works in pageDetails is the raw infrastructure value. Use getEmployeeWorkPool() for current accurate pool.
+        const { value: empAvailable, ready: poolReady } = getEmployeeWorkPool();
         const inputAmount = parseInt(empAmount.value) || 0;
 
-        const empBreakdown = {};
-        const rawNames = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
-        const prodNames = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
-        const rawProjectedEmp = {
-            FRM: { produced: 0, consumed: 0 },
-            WRM: { produced: 0, consumed: 0 },
-            HRM: { produced: 0, consumed: 0 },
-            ARM: { produced: 0, consumed: 0 }
-        };
-
         let remainingToSimulate = inputAmount;
-        const simAssignments = {}; // Track simulation per company ID
+        const simAssignments = {};
+        const empEntries = [];
 
         AppState.filteredArr.forEach(c => {
             if (c.can_assign_employees) {
@@ -1871,30 +2009,10 @@
                     const assignToThisComp = Math.min(remainingToSimulate, slots);
                     if (assignToThisComp > 0) {
                         simAssignments[c.id] = assignToThisComp;
-                        const fname = c.building_img.split('/').pop();
-                        const def = companyDefinitions[fname];
+                        const def = companyDefinitions[c.building_img.split('/').pop()];
                         if (def && def.baseProduction) {
                             const prodPerEmp = def.baseProduction * (parseFloat(c.effective_bonus) || 100) / 100;
-                            const totalCompProd = prodPerEmp * assignToThisComp;
-                            const industry = def.industry;
-                            const isRaw = industry.endsWith('_raw');
-
-                            if (isRaw) {
-                                const rawType = rawNames[industry.replace('_raw', '')];
-                                rawProjectedEmp[rawType].produced += totalCompProd;
-                                if (!empBreakdown[industry]) empBreakdown[industry] = { prod: 0, cons: 0, label: rawType, rawType };
-                                empBreakdown[industry].prod += totalCompProd;
-                            } else {
-                                const rawType = rawNames[industry];
-                                const key = `${industry}_q${c.quality}`;
-                                if (!empBreakdown[key]) empBreakdown[key] = { prod: 0, cons: 0, label: `Q${c.quality} ${prodNames[industry]}`, rawType };
-                                empBreakdown[key].prod += totalCompProd;
-                                if (def.rawCost) {
-                                    const cons = totalCompProd * def.rawCost;
-                                    empBreakdown[key].cons += cons;
-                                    rawProjectedEmp[rawType].consumed += cons;
-                                }
-                            }
+                            empEntries.push({ def, quality: c.quality, totalProd: prodPerEmp * assignToThisComp });
                         }
                         remainingToSimulate -= assignToThisComp;
                     }
@@ -1902,7 +2020,8 @@
             }
         });
 
-        // Map simulation back to grouped items for display
+        const { breakdown: empBreakdown, rawProjected: rawProjectedEmp } = computeProductionEstimate(empEntries);
+
         if (AppState.virtualList && AppState.virtualList.items) {
             AppState.virtualList.items.forEach(group => {
                 group.empSim = 0;
@@ -1911,55 +2030,52 @@
                     const ind = c.calculated_industry || 'unknown';
                     const q = c.calculated_quality || '1';
                     const key = `${hId}_${ind}_${q}`;
-                    if (key === group.key && simAssignments[c.id]) {
-                        group.empSim += simAssignments[c.id];
-                    }
+                    if (key === group.key && simAssignments[c.id]) group.empSim += simAssignments[c.id];
                 });
             });
             AppState.virtualList.render();
         }
 
-        let empEstimatesHtml = '';
-        Object.values(empBreakdown).forEach(t => {
-            if (t.prod > 0) {
-                const consLine = t.cons > 0 ? ` (Uses ${t.cons.toFixed(2)} ${t.rawType})` : '';
-                empEstimatesHtml += `Est. ${t.label}: <strong>${t.prod.toFixed(2)}</strong>${consLine}<br>`;
-            }
-        });
+        const { html: empEstimatesHtml, hasNegativeBalance: empNegBalance } = renderEstimateHtml(empBreakdown, rawProjectedEmp, getStockMap());
 
-        let empDeltaHtml = '';
-        const stockMap = {
-            'FRM': AppState.pageDetails.food_raw_stock || 0,
-            'WRM': AppState.pageDetails.weapon_raw_stock || 0,
-            'HRM': AppState.pageDetails.house_raw_stock || 0,
-            'ARM': AppState.pageDetails.airplane_raw_stock || 0
-        };
-
-        Object.entries(rawProjectedEmp).forEach(([type, stats]) => {
-            const current = stockMap[type] || 0;
-            const final = current + stats.produced - stats.consumed;
-            const color = final >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
-            empDeltaHtml += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong style="color:${color}">${final.toFixed(2)}</strong></span><br>`;
-        });
-
+        // Slot/action block — conditional
+        const btnUseMax = document.getElementById('btn-use-max-emp');
+        const empAvailableDisplay = poolReady ? (empAvailable || 0).toLocaleString() : '--';
+        let slotHtml;
         if (availableSlots > 0) {
-            assignSummary.innerHTML = `<strong>${availableSlots}</strong> slots available across <strong>${assignableCompanies}</strong> companies.<br>
-                                       ${empEstimatesHtml}
-                                       ${empDeltaHtml}
-                                       Employee available: <strong>${empAvailable}</strong>`;
-            btnAssign.disabled = !AppState.csrfToken;
-            empAmount.max = availableSlots;
+            btnAssign.disabled = !AppState.csrfToken || empNegBalance || !poolReady;
+            btnUseMax.disabled = !AppState.csrfToken || !poolReady;
+            empAmount.max = poolReady ? Math.min(availableSlots, empAvailable || 0) : 0;
+            slotHtml = `<strong>${availableSlots}</strong> slots available across <strong>${assignableCompanies}</strong> companies.<br>${empEstimatesHtml}`;
+            if (empNegBalance) slotHtml += `<span style="color:var(--danger-text); font-size:0.65rem;">Insufficient raw materials.</span><br>`;
         } else {
-            assignSummary.innerHTML = `No available employee slots in this filter combination.<br>
-                                       Employee available: <strong>${empAvailable}</strong>`;
             btnAssign.disabled = true;
+            btnUseMax.disabled = true;
+            slotHtml = `No available employee slots in this filter combination.<br>`;
         }
 
-        // Mass Upgrade UI
+        // Resource block — always rendered
+        const storageUsed = AppState.pageDetails.storage_used || 0;
+        const storageTotal = AppState.pageDetails.storage_total || 0;
+        const storagePct = storageTotal > 0 ? Math.round(storageUsed / storageTotal * 100) : 0;
+        const storageColor = storagePct >= 90 ? 'var(--danger-text)' : 'var(--on-surface-variant)';
+        const storageHtml = storageTotal > 0
+            ? `<span style="font-size:0.65rem;color:${storageColor}">Storage: ${storageUsed.toLocaleString()} / ${storageTotal.toLocaleString()} (${storagePct}%)</span><br>`
+            : '';
+
+        const poolNote = !poolReady ? ` <span style="color:var(--danger-text)">(infra sync required)</span>` : '';
+        assignSummary.innerHTML = slotHtml
+            + storageHtml
+            + `<span style="font-size:0.65rem;color:var(--on-surface-variant)">Available works: <strong>${empAvailableDisplay}</strong>${poolNote}</span>`;
+    }
+
+    function updateUpgradeUI() {
+        const btnUpgrade = document.getElementById('btn-mass-upgrade');
+        const upgradeSummary = document.getElementById('upgrade-summary');
+
+        const { holding, industry, quality } = AppState.filters;
         const isRaw = industry.endsWith('_raw');
         const upgradableIndustries = ['food', 'weapon', 'house', 'aircraft'];
-        const canUpgradeIndustry = upgradableIndustries.includes(industry);
-        const { quality } = AppState.filters;
 
         if (holding === 'all' || holding === 'unassigned') {
             btnUpgrade.disabled = true;
@@ -1967,7 +2083,7 @@
         } else if (industry === 'all') {
             btnUpgrade.disabled = true;
             upgradeSummary.textContent = 'Select a specific industry to enable mass upgrade.';
-        } else if (isRaw || !canUpgradeIndustry) {
+        } else if (isRaw || !upgradableIndustries.includes(industry)) {
             btnUpgrade.disabled = true;
             upgradeSummary.textContent = 'Raw material companies cannot be upgraded.';
         } else if (quality === 'all') {
@@ -1994,10 +2110,9 @@
 
                     const amountToUpgrade = Math.min(parseInt(document.getElementById('upgrade-amount').value) || 1, upgradableSet.length);
                     const sampleComp = upgradableSet[0];
-                    let totalCost = 0;
-                    if (sampleComp && sampleComp.upgrades && sampleComp.upgrades[targetQ]) {
-                        totalCost = parseInt(sampleComp.upgrades[targetQ].cost) * amountToUpgrade;
-                    }
+                    const totalCost = (sampleComp && sampleComp.upgrades && sampleComp.upgrades[targetQ])
+                        ? parseInt(sampleComp.upgrades[targetQ].cost) * amountToUpgrade
+                        : 0;
 
                     btnUpgrade.disabled = !AppState.csrfToken;
                     upgradeSummary.innerHTML = `
@@ -2011,62 +2126,75 @@
                 }
             }
         }
-        // Personal Work UI
+    }
+
+    function updatePersonalWorkUI() {
         const btnEmp = document.getElementById('btn-work-emp');
         const btnOt = document.getElementById('btn-work-ot');
         const pwSummary = document.getElementById('personal-work-summary');
 
         if (!AppState.pageDetails || !AppState.pageDetails.employee) {
             pwSummary.textContent = 'Employee data missing. Please sync.';
-        } else {
-            const isEmployed = !!AppState.pageDetails.employee.employer;
-            if (!isEmployed) {
-                pwSummary.textContent = 'You are not currently employed.';
-            } else {
-                const alreadyWorked = AppState.pageDetails.employee.alreadyWorked;
-                const now = Math.floor(Date.now() / 1000);
-                const nextOt = AppState.pageDetails.next_overtime_work || 0;
-
-                let otCost = 10;
-                let otText = '<span class="status-chip chip-success">Available (10 energy)</span>';
-                if (now < nextOt) {
-                    otCost = 100;
-                    otText = `<span class="status-chip chip-danger">Cooldown (100 energy)</span>`;
-                }
-
-                const hasEmpEnergy = AppState.energyData.energy >= 10;
-                const hasOtEnergy = AppState.energyData.energy >= otCost;
-
-                let salaryText = `${AppState.pageDetails.employee.salary} ${AppState.pageDetails.employee.currency}`;
-                pwSummary.innerHTML = `Salary: <strong style="color:var(--text-main)">${salaryText}</strong><br>Overtime: ${otText}`;
-
-                btnEmp.disabled = alreadyWorked || !hasEmpEnergy || !AppState.csrfToken;
-                btnEmp.textContent = alreadyWorked ? 'Already Worked' : 'Work';
-
-                btnOt.disabled = !alreadyWorked || !hasOtEnergy || !AppState.csrfToken;
-            }
+            return;
         }
+
+        const isEmployed = !!AppState.pageDetails.employee.employer;
+        if (!isEmployed) {
+            pwSummary.textContent = 'You are not currently employed.';
+            return;
+        }
+
+        const alreadyWorked = AppState.pageDetails.employee.alreadyWorked;
+        const now = Math.floor(Date.now() / 1000);
+        const nextOt = AppState.pageDetails.next_overtime_work || 0;
+        const otCost = now < nextOt ? 100 : 10;
+        const otText = now < nextOt
+            ? `<span class="status-chip chip-danger">Cooldown (100 energy)</span>`
+            : '<span class="status-chip chip-success">Available (10 energy)</span>';
+
+        const hasEmpEnergy = AppState.energyData.energy >= 10;
+        const hasOtEnergy = AppState.energyData.energy >= otCost;
+        const salaryText = `${AppState.pageDetails.employee.salary} ${AppState.pageDetails.employee.currency}`;
+
+        pwSummary.innerHTML = `Salary: <strong style="color:var(--text-main)">${salaryText}</strong><br>Overtime: ${otText}`;
+        btnEmp.disabled = alreadyWorked || !hasEmpEnergy || !AppState.csrfToken;
+        btnEmp.textContent = alreadyWorked ? 'Already Worked' : 'Work';
+        btnOt.disabled = !alreadyWorked || !hasOtEnergy || !AppState.csrfToken;
+        btnOt.title = !hasOtEnergy ? `Insufficient energy (need ${otCost})` : '';
+    }
+
+    function updateActionUI() {
+        updateWamUI();
+        updateAssignUI();
+        updateUpgradeUI();
+        updatePersonalWorkUI();
     }
 
     // ==========================================
     // 7. SYNCHRONIZATION SYSTEM
     // ==========================================
-    async function syncCsrf(silent = false) {
-        console.log('[Sync] Fetching CSRF Token...');
+
+    // Shared boilerplate: log → try → fetch → process → catch (error toast) → return bool.
+    // fetchFn: async () => rawText  (pass null if processFn handles its own fetches)
+    // processFn: async (rawText) => true | falsy
+    async function syncResource(name, fetchFn, processFn) {
+        console.log(`[Sync] Fetching ${name}...`);
         try {
-            const data = await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://www.erepublik.com/en',
-                    onload: r => {
-                        console.log(`[Sync Response] CSRF Status: ${r.status}`);
-                        (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(r.status);
-                    },
-                    onerror: () => reject('NetError')
-                });
-            });
-            const csrfMatch = data.match(/var csrfToken\s*=\s*'([^']+)';/);
-            if (csrfMatch) {
+            const raw = fetchFn ? await fetchFn() : null;
+            return (await processFn(raw)) === true;
+        } catch (e) {
+            console.error(`[Sync Error] ${name}:`, e);
+            showToast(`${name} Sync failed.`, 'error');
+            return false;
+        }
+    }
+
+    async function syncCsrf() {
+        return syncResource('CSRF',
+            () => apiGet('https://www.erepublik.com/en'),
+            async data => {
+                const csrfMatch = data.match(/var csrfToken\s*=\s*'([^']+)';/);
+                if (!csrfMatch) return false;
                 AppState.csrfToken = csrfMatch[1];
                 console.log(`[Sync] CSRF Token parsed: ${AppState.csrfToken.substring(0, 8)}...`);
                 await setDbValue('csrfToken', AppState.csrfToken);
@@ -2074,34 +2202,19 @@
                 showToast('CSRF Token updated.', 'success');
                 return true;
             }
-        } catch (e) {
-            console.error('[Sync Error] CSRF:', e);
-            showToast('CSRF Sync failed.', 'error');
-        } return false;
+        );
     }
 
-    async function syncInfrastructure(silent = false) {
-        console.log('[Sync] Fetching Infrastructure Data...');
-        try {
-            const data = await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://www.erepublik.com/en/economy/myCompanies',
-                    onload: r => {
-                        console.log(`[Sync Response] Infrastructure Status: ${r.status}`);
-                        (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(r.status);
-                    },
-                    onerror: () => reject('NetError')
-                });
-            });
-
-            const companiesMatch = data.match(/var companies\s*=\s*(\{.*\});/);
-            const holdingsMatch = data.match(/var holdingCompanies\s*=\s*(\{.*\});/);
-            const energyMatch = data.match(/var energyData\s*=\s*(\{.*\});/);
-            const pageMatch = data.match(/var pageDetails\s*=\s*(\{.*\});/);
-
-            if (companiesMatch) {
+    async function syncInfrastructure() {
+        return syncResource('Infrastructure',
+            () => apiGet('https://www.erepublik.com/en/economy/myCompanies'),
+            async data => {
+                const companiesMatch = data.match(/var companies\s*=\s*(\{.*\});/);
+                if (!companiesMatch) return false;
                 const companies = JSON.parse(companiesMatch[1]);
+                const holdingsMatch = data.match(/var holdingCompanies\s*=\s*(\{.*\});/);
+                const energyMatch = data.match(/var energyData\s*=\s*(\{.*\});/);
+                const pageMatch = data.match(/var pageDetails\s*=\s*(\{.*\});/);
                 const holdings = holdingsMatch ? JSON.parse(holdingsMatch[1]) : {};
                 const energy = energyMatch ? JSON.parse(energyMatch[1]) : { energy: 0 };
                 const pageDetails = pageMatch ? JSON.parse(pageMatch[1]) : {};
@@ -2118,44 +2231,41 @@
                     if (main && main.items) {
                         const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
                         main.items.forEach(item => {
-                            if (rawMap[item.industryId]) {
-                                pageDetails[rawMap[item.industryId]] = item.amount;
-                            }
+                            if (rawMap[item.industryId]) pageDetails[rawMap[item.industryId]] = item.amount;
                         });
                     }
                 }
-                
+
                 await setDbValue('pageDetails', pageDetails);
+
+                // employeeWorkPool set absolutely here — only place pool is set non-relatively.
+                // All other adjustments (workforce delta, assignment withdrawal) are relative.
+                const authoritativePool = parseInt(pageDetails.total_works || 0);
+                AppState.employeeWorkPool = authoritativePool;
+                await setDbValue('employeeWorkPool', authoritativePool);
+                // Reset delta tracking — next workforce sync re-establishes lastKnownWorksReceived.
+                AppState.lastKnownWorksReceivedDay = null;
+                AppState.lastKnownWorksReceived = 0;
+                await setDbValue('lastKnownWorksReceivedDay', null);
+                await setDbValue('lastKnownWorksReceived', 0);
+                console.log(`[WorkPool] Baseline set from infrastructure: ${authoritativePool}`);
 
                 updateSyncMeta('infrastructure');
                 await loadDataFromDb();
                 showToast(`Infrastructure synced: ${Object.keys(companies).length} companies.`, 'success');
                 return true;
             }
-        } catch (e) {
-            console.error('[Sync Error] Infrastructure:', e);
-            showToast('Infrastructure Sync failed.', 'error');
-        } return false;
+        );
     }
 
-    async function syncWorkforce(silent = false) {
-        console.log('[Sync] Fetching Workforce Intelligence...');
-        try {
-            const empRes = await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://www.erepublik.com/en/economy/manage-employees-json',
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                    onload: r => {
-                        console.log(`[Sync Response] Workforce Status: ${r.status}`);
-                        (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(r.status);
-                    },
-                    onerror: () => reject('NetError')
-                });
-            });
-            const employeeData = JSON.parse(empRes);
-            console.log(`[Sync] Workforce Parsed: ${employeeData.employees ? employeeData.employees.length : 0} operatives.`, employeeData);
-            if (employeeData.employees) {
+    async function syncWorkforce() {
+        return syncResource('Workforce',
+            () => apiGet('https://www.erepublik.com/en/economy/manage-employees-json', { 'X-Requested-With': 'XMLHttpRequest' }),
+            async data => {
+                const employeeData = JSON.parse(data);
+                console.log(`[Sync] Workforce Parsed: ${employeeData.employees ? employeeData.employees.length : 0} operatives.`, employeeData);
+                if (!employeeData.employees) return false;
+
                 await setDbValue('employees', employeeData.employees);
                 await setDbValue('employeeOverview', employeeData.overview || {});
 
@@ -2167,69 +2277,76 @@
                     await setDbValue('syncMeta', AppState.syncMeta);
                 }
 
+                // Work Pool delta — only runs if a baseline exists from infrastructure sync
+                const todayStats = employeeData.overview?.employeeStats?.dailyStats?.[currentDay];
+                const newWorksReceived = todayStats?.worksReceived ?? 0;
+                if (AppState.employeeWorkPool !== null) {
+                    let delta = 0;
+                    if (AppState.lastKnownWorksReceivedDay === currentDay) {
+                        // Same day — only count increase since last sync
+                        delta = Math.max(0, newWorksReceived - AppState.lastKnownWorksReceived);
+                    } else {
+                        // New day — all of today's worksReceived are new deposits
+                        delta = newWorksReceived;
+                    }
+                    if (delta > 0) {
+                        AppState.employeeWorkPool += delta;
+                        await setDbValue('employeeWorkPool', AppState.employeeWorkPool);
+                        console.log(`[WorkPool] +${delta} works deposited. Pool: ${AppState.employeeWorkPool}`);
+                    }
+                }
+                AppState.lastKnownWorksReceivedDay = currentDay;
+                AppState.lastKnownWorksReceived = newWorksReceived;
+                await setDbValue('lastKnownWorksReceivedDay', currentDay);
+                await setDbValue('lastKnownWorksReceived', newWorksReceived);
+
                 updateSyncMeta('workforce');
                 await loadDataFromDb();
                 showToast(`Workforce synced: ${employeeData.employees.length} operatives.`, 'success');
                 return true;
             }
-        } catch (e) {
-            console.error('[Sync Error] Workforce:', e);
-            showToast('Workforce Sync failed.', 'error');
-        } return false;
+        );
     }
 
-    async function syncStorage(silent = false) {
-        console.log('[Sync] Fetching Logistics/Inventory Data...');
-        try {
-            const invRes = await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://www.erepublik.com/en/economy/inventory-json',
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                    onload: r => {
-                        console.log(`[Sync Response] Logistics Status: ${r.status}`);
-                        (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(r.status);
-                    },
-                    onerror: () => reject('NetError')
-                });
-            });
-            const inventory = JSON.parse(invRes);
-            console.log('[Sync] Logistics Parsed:', inventory);
-            await setDbValue('inventory', inventory);
+    async function syncStorage() {
+        return syncResource('Storage',
+            () => apiGet('https://www.erepublik.com/en/economy/inventory-json', { 'X-Requested-With': 'XMLHttpRequest' }),
+            async data => {
+                const inventory = JSON.parse(data);
+                console.log('[Sync] Logistics Parsed:', inventory);
+                await setDbValue('inventory', inventory);
 
-            // Deep Sync: Propagate stock levels to pageDetails immediately
-            if (Array.isArray(inventory)) {
-                const mainStorage = inventory.find(s => s.id === 'mainStorage');
-                if (mainStorage && mainStorage.items) {
-                    const p = await getDbValue('pageDetails') || {};
-                    const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
-                    mainStorage.items.forEach(item => {
-                        if (rawMap[item.industryId]) {
-                            p[rawMap[item.industryId]] = item.amount;
+                // Deep Sync: Propagate stock levels to pageDetails immediately
+                if (Array.isArray(inventory)) {
+                    const mainStorage = inventory.find(s => s.id === 'mainStorage');
+                    if (mainStorage && mainStorage.items) {
+                        const p = await getDbValue('pageDetails') || {};
+                        const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
+                        mainStorage.items.forEach(item => {
+                            if (rawMap[item.industryId]) p[rawMap[item.industryId]] = item.amount;
+                        });
+                        if (mainStorage.status) {
+                            p.storage_used = mainStorage.status.usedStorage || 0;
+                            p.storage_total = mainStorage.status.totalStorage || 0;
                         }
-                    });
-                    await setDbValue('pageDetails', p);
-                    console.log('[Sync] pageDetails stocks synchronized from Inventory.');
+                        await setDbValue('pageDetails', p);
+                        console.log('[Sync] pageDetails stocks synchronized from Inventory.');
+                    }
                 }
-            }
 
-            updateSyncMeta('storage');
-            showToast('Logistics (Storage) synced.', 'success');
-            return true;
-        } catch (e) { 
-            console.error('[Sync Error] Logistics:', e);
-            showToast('Logistics Sync failed.', 'error'); 
-        }
-        return false;
+                updateSyncMeta('storage');
+                showToast('Logistics (Storage) synced.', 'success');
+                return true;
+            }
+        );
     }
     async function syncEnergy() {
-        console.log('[Sync] Fetching Vitality/Energy Data (Lightweight)...');
-        try {
-            const payload = `_token=${AppState.csrfToken}`;
-            const responseTxt = await apiPost('https://www.erepublik.com/en/economy/energyRefill-getInventory', payload);
-            const res = JSON.parse(responseTxt);
+        return syncResource('Energy',
+            () => apiPost('https://www.erepublik.com/en/economy/energyRefill-getInventory', `_token=${AppState.csrfToken}`),
+            async data => {
+                const res = JSON.parse(data);
+                if (!res || typeof res.poolEnergy === 'undefined') return false;
 
-            if (res && typeof res.poolEnergy !== 'undefined') {
                 const energy = {
                     energy: res.poolEnergy,
                     energyPoolLimit: res.poolLimit,
@@ -2237,7 +2354,6 @@
                     energyPerInterval: res.energyPerInterval,
                     energyStatus: res.energyStatus
                 };
-
                 console.log('[Sync] Energy Data Parsed:', energy);
                 await setDbValue('energyData', energy);
                 AppState.energyData = energy;
@@ -2248,16 +2364,11 @@
                 showToast('Vitality (Energy) updated.', 'success');
                 return true;
             }
-        } catch (e) {
-            console.error('[Sync Error] Energy:', e);
-            showToast('Vitality Sync failed.', 'error');
-        }
-        return false;
+        );
     }
 
     async function syncIntelligence() {
-        console.log('[Sync] Fetching Productivity Intelligence...');
-        try {
+        return syncResource('Intelligence', null, async () => {
             const uniqueRegions = new Set();
             Object.values(AppState.holdingsMap).forEach(h => uniqueRegions.add(h.region_id));
 
@@ -2275,22 +2386,10 @@
                     continue;
                 }
 
-                console.log(`[Sync] Fetching API data for ${regionData.name}...`);
-                const apiRes = await new Promise((resolve, reject) => {
-                    GM_xmlhttpRequest({
-                        method: 'GET',
-                        url: `https://productivityapi.curlybear.eu/productivity/?permalink=${regionData.permalink}`,
-                        onload: r => (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(r.status),
-                        onerror: () => reject('NetError')
-                    });
-                });
-
+                const apiRes = await apiGet(`https://productivityapi.curlybear.eu/productivity/?permalink=${regionData.permalink}`);
                 const dataArr = JSON.parse(apiRes);
                 if (Array.isArray(dataArr) && dataArr.length > 0) {
-                    AppState.productivityCache[rId] = {
-                        timestamp: now,
-                        data: dataArr[0]
-                    };
+                    AppState.productivityCache[rId] = { timestamp: now, data: dataArr[0] };
                     updateCount++;
                 }
                 await sleep(300); // Respectful throttle
@@ -2304,11 +2403,7 @@
             updateSyncMeta('intelligence');
             showToast(`Intelligence updated: ${updateCount} regions refreshed.`, 'success');
             return true;
-        } catch (e) {
-            console.error('[Sync Error] Intelligence:', e);
-            showToast('Intelligence Sync failed.', 'error');
-        }
-        return false;
+        });
     } async function updateSyncMeta(key) {
         AppState.syncMeta.timestamps[key] = Date.now();
         await setDbValue('syncMeta', AppState.syncMeta);
@@ -2336,10 +2431,10 @@
         showToast('Initiating Full System Re-calibration...', 'info');
 
         const results = {
-            csrf: await syncCsrf(true),
-            infrastructure: await syncInfrastructure(true),
-            workforce: await syncWorkforce(true),
-            storage: await syncStorage(true),
+            csrf: await syncCsrf(),
+            infrastructure: await syncInfrastructure(),
+            workforce: await syncWorkforce(),
+            storage: await syncStorage(),
             energy: await syncEnergy(),
             intelligence: await syncIntelligence()
         };
@@ -2382,7 +2477,28 @@
         const holding = AppState.holdingsMap[holdingId];
         const hName = holding ? holding.name : 'Unknown';
 
-        if (!confirm(`Work as Manager in ${totalSelected} companies in ${hName}?\nThis will cost ${energyRequired} energy.`)) return;
+        const confirmLines = [];
+        selectedGroups.forEach(group => {
+            const sample = AppState.filteredArr.find(c => {
+                const fname = c.building_img.split('/').pop();
+                const def = companyDefinitions[fname];
+                return def && def.industry === group.industry && def.quality === `q${group.quality}`;
+            });
+            if (!sample) return;
+            const def = companyDefinitions[sample.building_img.split('/').pop()];
+            const productivity = parseFloat(sample.effective_bonus) || 100;
+            const totalProd = def.baseProduction * productivity / 100 * group.wamCount;
+            const isRaw = group.industry.endsWith('_raw');
+            const label = isRaw
+                ? `Q${group.quality} ${formatIndustryName(group.industry)}`
+                : `Q${group.quality} ${PROD_NAMES[group.industry] || formatIndustryName(group.industry)}`;
+            let line = `${label} (${parseFloat(productivity).toFixed(2)}%) — Est. ${totalProd.toFixed(2)} units`;
+            if (!isRaw && def.rawCost) line += ` (Uses ${(totalProd * def.rawCost).toFixed(2)} ${RAW_NAMES[group.industry]})`;
+            confirmLines.push(line);
+        });
+
+        const wamConfirmMsg = `Work as Manager in ${totalSelected} companies in ${hName}?\n\n${confirmLines.join('\n')}\n\nEnergy required: ${energyRequired}`;
+        if (!confirm(wamConfirmMsg)) return;
 
         const btnWam = document.getElementById('btn-wam');
         btnWam.disabled = true;
@@ -2438,6 +2554,11 @@
             const responseTxt = await apiPost('https://www.erepublik.com/en/economy/work', payload);
             const res = JSON.parse(responseTxt);
 
+            if (isCaptchaResponse(res)) {
+                showToast('Captcha required. Open the game in your browser to solve it, then retry.', 'error');
+                return;
+            }
+
             if (res.status === true) {
                 AppState.energyData.energy = Math.max(0, AppState.energyData.energy - energyRequired);
                 affectedCompanies.forEach(c => c.already_worked = true);
@@ -2458,13 +2579,12 @@
                     }
                 });
 
-                const rawNamesShorthand = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
                 const p = AppState.pageDetails;
                 const typeToId = { 'FRM': 7, 'WRM': 12, 'HRM': 17, 'ARM': 24 };
                 const deltas = {};
 
                 Object.entries(typeMap).forEach(([ind, stats]) => {
-                    const rName = rawNamesShorthand[ind.replace('_raw', '')];
+                    const rName = RAW_NAMES[ind.replace('_raw', '')];
                     const delta = stats.p - stats.c;
                     if (delta !== 0) {
                         deltas[rName] = (deltas[rName] || 0) + delta;
@@ -2565,48 +2685,23 @@
         }
 
         // Detailed Confirmation (Recalculate breakdown locally for the confirmation msg)
-        const empBreakdownLocal = {};
-        const rawNames = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
-        const prodNames = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
-        const rawProjectedEmpLocal = {
-            FRM: { produced: 0, consumed: 0 },
-            WRM: { produced: 0, consumed: 0 },
-            HRM: { produced: 0, consumed: 0 },
-            ARM: { produced: 0, consumed: 0 }
-        };
+        const empProductivityMap = {};
+        const confirmEntries = affectedCompanies.map(({ obj, amount: assignToThisComp }) => {
+            const def = companyDefinitions[obj.building_img.split('/').pop()];
+            if (!def || !def.baseProduction) return null;
+            const productivity = parseFloat(obj.effective_bonus) || 100;
+            const key = def.industry.endsWith('_raw') ? def.industry : `${def.industry}_q${obj.quality}`;
+            if (!empProductivityMap[key]) empProductivityMap[key] = productivity;
+            const prodPerEmp = def.baseProduction * productivity / 100;
+            return { def, quality: obj.quality, totalProd: prodPerEmp * assignToThisComp };
+        }).filter(Boolean);
+        const { breakdown: empBreakdownLocal, rawProjected: rawProjectedEmpLocal } = computeProductionEstimate(confirmEntries);
 
-        affectedCompanies.forEach(({ obj, amount: assignToThisComp }) => {
-            const fname = obj.building_img.split('/').pop();
-            const def = companyDefinitions[fname];
-            if (def && def.baseProduction) {
-                const prodPerEmp = def.baseProduction * (parseFloat(obj.effective_bonus) || 100) / 100;
-                const totalCompProd = prodPerEmp * assignToThisComp;
-                const industry = def.industry;
-                const isRaw = industry.endsWith('_raw');
-
-                if (isRaw) {
-                    const rawType = rawNames[industry.replace('_raw', '')];
-                    rawProjectedEmpLocal[rawType].produced += totalCompProd;
-                    if (!empBreakdownLocal[industry]) empBreakdownLocal[industry] = { prod: 0, cons: 0, label: rawType, rawType };
-                    empBreakdownLocal[industry].prod += totalCompProd;
-                } else {
-                    const rawType = rawNames[industry];
-                    const key = `${industry}_q${obj.quality}`;
-                    if (!empBreakdownLocal[key]) empBreakdownLocal[key] = { prod: 0, cons: 0, label: `Q${obj.quality} ${prodNames[industry]}`, rawType };
-                    empBreakdownLocal[key].prod += totalCompProd;
-                    if (def.rawCost) {
-                        const cons = totalCompProd * def.rawCost;
-                        empBreakdownLocal[key].cons += cons;
-                        rawProjectedEmpLocal[rawType].consumed += cons;
-                    }
-                }
-            }
-        });
-
-        let confirmMsg = `Assign and work ${amount - left} employees in ${companyCount} companies?\n\nProjections:\n`;
-        Object.values(empBreakdownLocal).forEach(t => {
+        let confirmMsg = `Assign and work ${amount - left} employees in ${companyCount} companies?\n\n`;
+        Object.entries(empBreakdownLocal).forEach(([key, t]) => {
             if (t.prod > 0) {
-                confirmMsg += `- ${t.label}: ${t.prod.toFixed(2)} units`;
+                const pct = empProductivityMap[key] || 100;
+                confirmMsg += `${t.label} (${parseFloat(pct).toFixed(2)}%) — Est. ${t.prod.toFixed(2)} units`;
                 if (t.cons > 0) confirmMsg += ` (Uses ${t.cons.toFixed(2)} ${t.rawType})`;
                 confirmMsg += '\n';
             }
@@ -2624,6 +2719,10 @@
         try {
             const responseTxt = await apiPost('https://www.erepublik.com/en/economy/work', payload);
             const res = JSON.parse(responseTxt);
+            if (isCaptchaResponse(res)) {
+                showToast('Captcha required. Open the game in your browser to solve it, then retry.', 'error');
+                return;
+            }
             if (res.status === true) {
                 showToast(`Successfully worked ${amount - left} employees!`, 'success');
 
@@ -2664,6 +2763,14 @@
                         });
                         await setDbValue('inventory', inv);
                     }
+                }
+
+                // Withdraw assigned count from work pool
+                const assignedCount = amount - left;
+                if (AppState.employeeWorkPool !== null) {
+                    AppState.employeeWorkPool = Math.max(0, AppState.employeeWorkPool - assignedCount);
+                    await setDbValue('employeeWorkPool', AppState.employeeWorkPool);
+                    console.log(`[WorkPool] -${assignedCount} works assigned. Pool: ${AppState.employeeWorkPool}`);
                 }
 
                 amountInput.value = 0;
@@ -2714,13 +2821,10 @@
         const industry = AppState.filters.industry;
         const currentQ = AppState.filters.quality;
 
-        const confirmMsg = `MASS UPGRADE COMMAND\n\n` +
-            `→ Holding: ${hName}\n` +
-            `→ Region: ${regionData.name} (ID: ${rId})\n\n` +
-            `Action: Upgrade ${toUpgrade.length} ${formatIndustryName(industry)} companies\n` +
-            `Level: Q${currentQ} → Q${targetQ}\n` +
-            `Total Cost: ${totalCost.toLocaleString()} Gold\n\n` +
-            `Confirm high-value transaction?`;
+        const confirmMsg =
+            `Upgrade ${toUpgrade.length}× ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}\n` +
+            `${hName} · ${regionData.name}\n` +
+            `Cost: ${totalCost.toLocaleString()} Gold`;
 
         if (!confirm(confirmMsg)) return;
 
@@ -2823,6 +2927,10 @@
         try {
             const responseTxt = await apiPost('https://www.erepublik.com/en/economy/work', payload);
             const res = JSON.parse(responseTxt);
+            if (isCaptchaResponse(res)) {
+                showToast('Captcha required. Open the game in your browser to solve it, then retry.', 'error');
+                return;
+            }
             if (res.status === true || res.message === 'already_worked') {
                 if (res.status === true) {
                     showToast('Worked successfully!', 'success');
@@ -2850,7 +2958,10 @@
         const nextOt = AppState.pageDetails.next_overtime_work || 0;
         const energyCost = (now < nextOt) ? 100 : 10;
 
-        if (!confirm(`Work overtime? This will cost ${energyCost} energy.`)) return;
+        const warningPrefix = energyCost === 100
+            ? `⚠ Careful! This overtime will cost 100 energy (not 10).\n\n`
+            : '';
+        if (!confirm(`${warningPrefix}Work overtime? This will cost ${energyCost} energy.`)) return;
 
         const btn = document.getElementById('btn-work-ot');
         btn.disabled = true; btn.textContent = 'Working...';
@@ -2859,6 +2970,10 @@
         try {
             const responseTxt = await apiPost('https://www.erepublik.com/en/economy/workOvertime', payload);
             const res = JSON.parse(responseTxt);
+            if (isCaptchaResponse(res)) {
+                showToast('Captcha required. Open the game in your browser to solve it, then retry.', 'error');
+                return;
+            }
             if (res.message === true || res.status === true) {
                 showToast(`Overtime successful!`, 'success');
                 AppState.energyData.energy -= energyCost;
