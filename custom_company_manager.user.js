@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.4
-// @description  High-performance, custom "Company Manager plus" dashboard.
+// @version      0.7
+// @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
 // @grant        GM_xmlhttpRequest
@@ -20,8 +20,9 @@
     const DB_NAME = 'eRepCustomManagerDB';
     const DB_VERSION = 1;
     const CUSTOM_URL = '/en/economy/custom-manager';
+    // The game does not allow WAM (Work as Manager) for house and aircraft industries — server rejects it.
     const NON_WAMMABLE_INDUSTRIES = new Set(['house', 'house_raw', 'aircraft', 'aircraft_raw']);
-    const RAW_NAMES  = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
+    const RAW_NAMES = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
     const PROD_NAMES = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
     const TYCOON_BUFFER_SECONDS = 60; // Safety margin: treat pack as expired this many seconds early
 
@@ -602,6 +603,8 @@
         764: { name: "Oriente", permalink: "Oriente" }
     };
 
+    // Keyed by the company's building image filename — the only reliable type identifier the game exposes.
+    // There is no structured industry/quality field; the filename is reverse-engineered from the DOM.
     const companyDefinitions = {
         // Food Raw
         'grain.png': { industry: 'food_raw', quality: 'q1', baseProduction: 0.35 },
@@ -703,10 +706,17 @@
         tycoonBonus: 0,
         tycoonUntil: 0,
         wamSelections: {},
+        _wamEntries: [],
+        _wamRegionIds: [],
+        _assignEntries: [],
+        _assignRegionIds: [],
         employeeWorkPool: null,          // running pool; null = no baseline (infra sync required)
         lastKnownWorksReceivedDay: null, // game day of last workforce sync
         lastKnownWorksReceived: 0,       // worksReceived seen on that day
-        lastTycoonUntilForBonus: 0       // tycoonUntil for which +150 was already deposited
+        lastTycoonUntilForBonus: 0,      // tycoonUntil value for which +150 was deposited — prevents re-deposit on repeated data loads while the same pack is active
+        tableSort: { col: null, dir: 1 },
+        gold: null,
+        cc: null
     };
 
     // ==========================================
@@ -760,6 +770,8 @@
             this.container.style.overflowY = 'auto';
             this.container.style.position = 'relative';
 
+            // scroller is an empty div whose only job is to set the total scrollable height,
+            // making the scrollbar behave as if all rows were in the DOM.
             this.scroller = document.createElement('div');
             this.container.appendChild(this.scroller);
 
@@ -770,11 +782,15 @@
             this.content.style.width = '100%';
             this.container.appendChild(this.content);
 
+            this._lastFirst = -1;
+            this._lastLast = -1;
             this.container.addEventListener('scroll', () => this.render());
         }
 
         setItems(items) {
             this.items = items;
+            this._lastFirst = -1;
+            this._lastLast = -1;
             this.scroller.style.height = (this.items.length * this.rowHeight) + 'px';
             this.container.scrollTop = 0;
             this.render();
@@ -787,9 +803,14 @@
             const startIdx = Math.floor(scrollTop / this.rowHeight);
             const visibleNodesCount = Math.ceil(viewportHeight / this.rowHeight);
 
+            // Render a few rows beyond the visible window to prevent blank flicker during fast scrolling.
             const buffer = 5;
             const firstNode = Math.max(0, startIdx - buffer);
             const lastNode = Math.min(this.items.length - 1, startIdx + visibleNodesCount + buffer);
+
+            if (firstNode === this._lastFirst && lastNode === this._lastLast) return;
+            this._lastFirst = firstNode;
+            this._lastLast = lastNode;
 
             this.content.style.transform = `translateY(${firstNode * this.rowHeight}px)`;
 
@@ -807,6 +828,9 @@
     // ==========================================
     // 4. API HELPER
     // ==========================================
+    // GM_xmlhttpRequest is required for all cross-origin requests — userscript fetch() cannot reach
+    // external domains (erepublik.com from a different origin, or the productivity API).
+    // apiPost sends form-encoded bodies because the game's endpoints require that content type.
     async function apiPost(url, payload) {
         console.log(`[API POST Request] URL: ${url}`, payload);
         return new Promise((resolve, reject) => {
@@ -821,6 +845,26 @@
                 },
                 onerror: function (err) {
                     console.error(`[API POST Error] URL: ${url}`, err);
+                    reject('Network error.');
+                }
+            });
+        });
+    }
+
+    async function apiPostJson(url, body) {
+        console.log(`[API POST JSON Request] URL: ${url}`, body);
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: url,
+                data: JSON.stringify(body),
+                headers: { 'Content-Type': 'application/json' },
+                onload: function (r) {
+                    console.log(`[API POST JSON Response] URL: ${url} Status: ${r.status}`, r.responseText);
+                    (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject('Fail: ' + r.status);
+                },
+                onerror: function (err) {
+                    console.error(`[API POST JSON Error] URL: ${url}`, err);
                     reject('Network error.');
                 }
             });
@@ -847,6 +891,21 @@
     }
 
     const sleep = ms => new Promise(res => setTimeout(res, ms));
+
+    // Shared by loadDataFromDb, syncInfrastructure, and syncStorage — all three need to write
+    // raw stock levels and storage capacity from the inventory mainStorage entry into a pageDetails object.
+    function applyInventoryStocks(mainStorage, pageDetails) {
+        const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
+        if (mainStorage.items) {
+            mainStorage.items.forEach(item => {
+                if (rawMap[item.industryId]) pageDetails[rawMap[item.industryId]] = item.amount;
+            });
+        }
+        if (mainStorage.status) {
+            pageDetails.storage_used = mainStorage.status.usedStorage || 0;
+            pageDetails.storage_total = mainStorage.status.totalStorage || 0;
+        }
+    }
 
     // entries: Array of { def, quality, totalProd }
     // Returns { breakdown, rawProjected } for display and stock-delta logic.
@@ -897,6 +956,18 @@
         };
     }
 
+    // Formats a past timestamp (ms) as a relative "X ago" string.
+    function formatTimeAgo(ts) {
+        const diffMs = Date.now() - ts;
+        const diffMin = Math.floor(diffMs / 60000);
+        if (diffMin < 1) return 'just now';
+        if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
+        const diffH = Math.floor(diffMin / 60);
+        if (diffH < 24) return `${diffH} hour${diffH === 1 ? '' : 's'} ago`;
+        const diffD = Math.floor(diffH / 24);
+        return `${diffD} day${diffD === 1 ? '' : 's'} ago`;
+    }
+
     // Formats a duration in seconds as "Xd Xh Xm Xs", dropping leading zero units.
     function formatCountdown(seconds) {
         const d = Math.floor(seconds / 86400);
@@ -931,6 +1002,20 @@
         }
     }
 
+    function updateWalletDisplay() {
+        const el = document.getElementById('wallet-display');
+        if (!el) return;
+        const lines = [];
+        if (AppState.gold !== null) lines.push(`<span style="color:var(--primary);font-size:13px;font-weight:bold;">${AppState.gold.toLocaleString()} Gold</span>`);
+        if (AppState.cc !== null) {
+            const ccName = AppState.employeeOverview.currency || 'CC';
+            lines.push(`<span style="color:var(--secondary);font-size:11px;">${AppState.cc.toLocaleString()} ${ccName}</span>`);
+        }
+        el.innerHTML = lines.length > 0
+            ? `<span style="display:flex;flex-direction:column;align-items:flex-end;line-height:1.3;">${lines.join('')}</span>`
+            : '';
+    }
+
     // Current raw stock levels from AppState — used by estimate renderers and delta logic.
     function getStockMap() {
         return {
@@ -941,8 +1026,8 @@
         };
     }
 
-    // Returns true if the game responded with a captcha challenge.
-    // The script cannot solve captchas — caller must surface this to the user and abort.
+    // The game returns HTTP 200 even for captcha challenges — status code alone is not enough.
+    // Callers must check this before treating a response as a success.
     function isCaptchaResponse(res) {
         return res && res.status === false && res.message === 'captcha';
     }
@@ -952,6 +1037,39 @@
     function getEmployeeWorkPool() {
         if (AppState.employeeWorkPool === null) return { value: null, ready: false };
         return { value: AppState.employeeWorkPool, ready: true };
+    }
+
+    // Returns a small HTML line describing the productivity data source and freshness.
+    // regionIds: array of region IDs relevant to the current context.
+    // When infrastructure.auto=ON: shows internal sync age and stale warning.
+    // When infrastructure.auto=OFF: shows external API age and next-refresh countdown.
+    function renderProductivityStatusHtml(regionIds) {
+        const useInternal = AppState.syncSettings.infrastructure.auto;
+        const s = 'font-size:0.65rem;';
+
+        if (useInternal) {
+            const lastSync = AppState.syncMeta.timestamps.infrastructure;
+            if (!lastSync) {
+                return `<span style="${s}color:var(--on-surface-variant)">Productivity: no infrastructure sync yet</span><br>`;
+            }
+            const ageMin = Math.floor((Date.now() - lastSync) / 60000);
+            if (ageMin > 10) {
+                return `<span style="${s}color:var(--danger-text)">⚠ Productivity data ${ageMin} min old — refresh recommended before production</span><br>`;
+            }
+            return `<span style="${s}color:var(--on-surface-variant)">Productivity: internal · updated ${ageMin} min ago</span><br>`;
+        }
+
+        // External productivity API path (Companies & Holdings auto-sync is OFF)
+        const intelligenceSyncTime = AppState.syncMeta.timestamps.intelligence;
+        if (!intelligenceSyncTime) {
+            return `<span style="${s}color:var(--on-surface-variant)">Productivity: no data — run Productivity sync</span><br>`;
+        }
+        const ageMin = Math.floor((Date.now() - intelligenceSyncTime) / 60000);
+        const nextRefreshMin = Math.max(0, 60 - ageMin);
+        const isStale = ageMin >= 60;
+        const color = isStale ? 'var(--danger-text)' : 'var(--on-surface-variant)';
+        const staleTag = isStale ? ' ⚠ stale' : '';
+        return `<span style="${s}color:${color}">Productivity: External API · ${ageMin} min ago${staleTag} · refresh in ${nextRefreshMin} min</span><br>`;
     }
 
     // Returns { html, hasNegativeBalance } — negative balance spans get pulse animation class.
@@ -1120,12 +1238,15 @@
                 .summary-item .value { font-size: 1.125rem; font-weight: 700; color: #fff; }
 
                 .presence-dot {
-                    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-                    margin-right: 4px;
+                    display: inline-flex; align-items: center; justify-content: center;
+                    width: 14px; height: 14px; border-radius: 50%;
+                    font-size: 0.5rem; font-weight: 700; line-height: 1;
+                    margin-right: 4px; color: #121416;
                 }
                 .dot-worked { background: var(--success-text); box-shadow: 0 0 5px var(--success-text); }
                 .dot-missed { background: var(--danger-container); box-shadow: 0 0 5px var(--danger-container); }
                 .dot-pending { background: var(--outline); box-shadow: 0 0 5px var(--outline); }
+                .dot-multi { background: #fabd00; box-shadow: 0 0 5px #fabd00; }
 
                 #toast-container {
                     position: fixed; bottom: 20px; right: 20px;
@@ -1197,6 +1318,7 @@
                     <div style="display:flex; align-items:center; gap:15px;">
                         <span id="tycoon-display" style="font-weight: bold; color: var(--secondary); font-size: 13px;"></span>
                         <span id="energy-display" style="font-weight: bold; color: var(--primary);">Energy: --</span>
+                        <span id="wallet-display" style="font-size: 13px; font-weight: bold;"></span>
                         <button id="btn-sync" class="btn">Full System Sync</button>
                     </div>
                 </div>
@@ -1276,6 +1398,10 @@
                         </div>
                         
                         <hr style="border-color: var(--border); margin: 20px 0;" />
+                        <div style="margin-bottom:8px; font-size:0.6875rem; text-transform:uppercase; letter-spacing:0.5px; color:var(--on-surface-variant); font-family:'Space Grotesk',sans-serif; font-weight:600;">Production Estimate</div>
+                        <div id="resource-estimate" class="summary" style="margin-bottom:0;">—</div>
+
+                        <hr style="border-color: var(--border); margin: 20px 0;" />
                         <h3 style="margin-top:0">Employee Assignment</h3>
                         <p class="summary" id="assign-summary">Filter above to find target companies.</p>
                         <div class="form-group">
@@ -1320,18 +1446,18 @@
                     
                     <div class="panel" style="padding-bottom: 0;">
                         <div class="tabs">
-                            <div class="tab active" data-tab="companies">Inventory & Production</div>
-                            <div class="tab" data-tab="employees">Workforce Intelligence</div>
-                            <div class="tab" data-tab="settings">Command Center</div>
+                            <div class="tab active" data-tab="companies">Companies</div>
+                            <div class="tab" data-tab="employees">Employees</div>
+                            <div class="tab" data-tab="settings">Settings</div>
                         </div>
 
                         <div id="tab-companies" style="display:flex; flex-direction:column; flex:1; min-height:0;">
                             <h3 style="margin-top:0">Holdings Summary (<span id="count-display">0</span> Companies)</h3>
-                            <div class="header-row">
-                                <div class="col-name">Industry</div>
-                                <div class="col-emp">Employees</div>
-                                <div class="col-hold">Holding</div>
-                                <div class="col-stat">Status</div>
+                            <div class="header-row" id="company-header-row">
+                                <div class="col-name" data-sort="industry" style="cursor:pointer;user-select:none;">Industry</div>
+                                <div class="col-emp" data-sort="employees" style="cursor:pointer;user-select:none;">Employees</div>
+                                <div class="col-hold" data-sort="holding" style="cursor:pointer;user-select:none;">Holding</div>
+                                <div class="col-stat" data-sort="status" style="cursor:pointer;user-select:none;">Status</div>
                             </div>
                             <div id="list-container"></div>
                         </div>
@@ -1351,9 +1477,9 @@
                                     <span class="value" id="wf-avg-salary">--</span>
                                 </div>
                             </div>
-                            <h3 style="margin-top:0">Employee Intelligence (<span id="emp-count-display">0</span> Operatives)</h3>
+                            <h3 style="margin-top:0">Employees (<span id="emp-count-display">0</span>)</h3>
                             <div class="header-row">
-                                <div class="col-name">Operative</div>
+                                <div class="col-name">Employee</div>
                                 <div class="col-q" style="width:20%">Presence (7d)</div>
                                 <div class="col-emp" style="width:20%">Salary</div>
                                 <div class="col-hold" style="width:25%">Total Paid (7d)</div>
@@ -1376,7 +1502,7 @@
 
         // 3. Bind Event Listeners
         document.getElementById('btn-sync').addEventListener('click', performGoldenLoad);
-        document.getElementById('filter-holding').addEventListener('change', e => { AppState.filters.holding = e.target.value; applyFilters(); });
+        document.getElementById('filter-holding').addEventListener('change', e => { AppState.filters.holding = e.target.value; AppState.wamSelections = {}; applyFilters(); });
         document.getElementById('filter-industry').addEventListener('change', e => { AppState.filters.industry = e.target.value; applyFilters(); });
         document.getElementById('filter-quality').addEventListener('change', e => { AppState.filters.quality = e.target.value; applyFilters(); });
 
@@ -1474,16 +1600,35 @@
             });
         });
 
+        // Column sort headers
+        document.querySelectorAll('#company-header-row [data-sort]').forEach(el => {
+            el.addEventListener('click', () => {
+                const col = el.dataset.sort;
+                if (AppState.tableSort.col === col) {
+                    if (AppState.tableSort.dir === -1) {
+                        AppState.tableSort.col = null;
+                        AppState.tableSort.dir = 1;
+                    } else {
+                        AppState.tableSort.dir = -1;
+                    }
+                } else {
+                    AppState.tableSort.col = col;
+                    AppState.tableSort.dir = 1;
+                }
+                applyFilters();
+            });
+        });
+
         // 4. Initial Data Load & Auto-Sync
         await loadDataFromDb();
 
         const autoSync = async () => {
             if (AppState.syncSettings.csrf.auto) await syncCsrf(true);
             if (AppState.syncSettings.infrastructure.auto) await syncInfrastructure(true);
-            if (AppState.syncSettings.workforce.auto) await syncWorkforce(true);
             if (AppState.syncSettings.storage.auto) await syncStorage(true);
-            if (AppState.syncSettings.energy.auto) await syncEnergy();
-            if (AppState.syncSettings.intelligence.auto) await syncIntelligence();
+            if (AppState.syncSettings.energy.auto) await syncEnergy(true);
+            if (AppState.syncSettings.intelligence.auto) await syncIntelligence(false, true);
+            if (AppState.syncSettings.workforce.auto) await syncWorkforce(true);
         };
 
         document.title = "Custom Company Manager";
@@ -1499,6 +1644,11 @@
                 applyFilters();
             }
             updateTycoonDisplay();
+            document.querySelectorAll('.sync-time').forEach(timeEl => {
+                const id = timeEl.dataset.syncId;
+                const lastSync = AppState.syncMeta.timestamps[id];
+                timeEl.textContent = lastSync ? formatTimeAgo(lastSync) : 'Never';
+            });
         }, 1000);
 
         autoSync();
@@ -1542,16 +1692,13 @@
         // 1. Unify Raw Material Stocks
         if (Array.isArray(inventory)) {
             const mainStorage = inventory.find(s => s.id === 'mainStorage');
-            if (mainStorage && mainStorage.items) {
-                const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
-                mainStorage.items.forEach(item => {
-                    if (rawMap[item.industryId]) {
-                        AppState.pageDetails[rawMap[item.industryId]] = item.amount;
-                    }
-                });
-                if (mainStorage.status) {
-                    AppState.pageDetails.storage_used = mainStorage.status.usedStorage || 0;
-                    AppState.pageDetails.storage_total = mainStorage.status.totalStorage || 0;
+            if (mainStorage) {
+                applyInventoryStocks(mainStorage, AppState.pageDetails);
+                if (mainStorage.items) {
+                    const goldItem = mainStorage.items.find(i => i.id === 'gold');
+                    const ccItem = mainStorage.items.find(i => i.id === 'currency');
+                    AppState.gold = goldItem ? goldItem.amount : null;
+                    AppState.cc = ccItem ? ccItem.amount : null;
                 }
             }
 
@@ -1599,6 +1746,7 @@
 
         // Update Header UI (interval keeps this live; this is the initial render on data load)
         updateTycoonDisplay();
+        updateWalletDisplay();
 
         AppState.companiesArr = Object.values(companies);
         AppState.holdingsMap = holdings;
@@ -1640,10 +1788,13 @@
             c.calculated_industry = calcInd;
             c.calculated_quality = calcQual;
 
-            // Productivity Intelligence Override
+            // Productivity source: internal data takes priority when infrastructure auto-sync is ON.
+            // External API (productivityCache) is only used when infrastructure auto-sync is OFF.
+            // c.effective_bonus is mutated here so downstream renderers can read it without extra lookups.
             const hId = c.holding_company_id;
             const regionId = hId && AppState.holdingsMap[hId] ? AppState.holdingsMap[hId].region_id : null;
-            const intel = regionId ? AppState.productivityCache[regionId] : null;
+            const useExternalProductivity = !AppState.syncSettings.infrastructure.auto;
+            const intel = (useExternalProductivity && regionId) ? AppState.productivityCache[regionId] : null;
             if (intel && intel.data) {
                 const d = intel.data;
                 let apiVal = 1; // Default
@@ -1660,13 +1811,15 @@
 
                 c.effective_bonus = (apiVal * 100) + tycoonAdd;
             } else {
-                // Base + Tycoon if no API data
-                c.effective_bonus = (c.effective_bonus || 100) + tycoonAdd;
+                // _rawBonus captures the game's base value once. Without it, repeated applyFilters
+                // calls compound tycoonAdd onto an already-inflated c.effective_bonus.
+                if (c._rawBonus === undefined) c._rawBonus = c.effective_bonus;
+                c.effective_bonus = (c._rawBonus || 100) + tycoonAdd;
             }
 
             let passHolding = true;
             if (holding === 'unassigned') passHolding = (c.holding_company_id === false);
-            else if (holding !== 'all') passHolding = (c.holding_company_id == holding);
+            else if (holding !== 'all') passHolding = (c.holding_company_id == holding); // loose == : select value is string, company field is number
 
             let passInd = (industry === 'all') || (calcInd === industry);
             let passQ = (quality === 'all') || (calcQual == quality);
@@ -1719,6 +1872,18 @@
             return a.quality - b.quality;
         });
 
+        // Column sort override (click on header)
+        const { col, dir } = AppState.tableSort;
+        if (col) {
+            const sortFns = {
+                industry: (a, b) => a.industry.localeCompare(b.industry) || a.quality - b.quality,
+                employees: (a, b) => b.empSlots - a.empSlots,
+                holding: (a, b) => a.holding_name.localeCompare(b.holding_name),
+                status: (a, b) => b.pending - a.pending,
+            };
+            if (sortFns[col]) aggregatedArr.sort((a, b) => sortFns[col](a, b) * dir);
+        }
+
         // Restore WAM selections from state or initialize to max pending
         aggregatedArr.forEach(group => {
             const isWammable = !NON_WAMMABLE_INDUSTRIES.has(group.industry);
@@ -1736,8 +1901,18 @@
         });
 
         AppState.virtualList.setItems(aggregatedArr);
-
+        updateSortIndicators();
         updateActionUI();
+    }
+
+    function updateSortIndicators() {
+        const labels = { industry: 'Industry', employees: 'Employees', holding: 'Holding', status: 'Status' };
+        document.querySelectorAll('#company-header-row [data-sort]').forEach(el => {
+            const col = el.dataset.sort;
+            const isActive = AppState.tableSort.col === col;
+            el.style.color = isActive ? 'var(--primary)' : '';
+            el.textContent = labels[col] + (isActive ? (AppState.tableSort.dir === 1 ? ' ▲' : ' ▼') : '');
+        });
     }
 
     function updateWorkforceSummary() {
@@ -1781,23 +1956,24 @@
         if (!container) return;
 
         const modules = [
-            { id: 'csrf', title: 'Access Credentials', desc: 'CSRF security token for game actions.' },
-            { id: 'infrastructure', title: 'Industry & Assets', desc: 'Holdings, factories, and resource bonuses.' },
-            { id: 'workforce', title: 'Personnel Intelligence', desc: 'Employee records and work history.' },
-            { id: 'storage', title: 'Inventory & Logistics', desc: 'Resource levels, items, and currencies.' },
-            { id: 'energy', title: 'Vitality Intelligence', desc: 'Energy levels, pool limits, and recovery status.' }
+            { id: 'csrf', title: 'Token', desc: 'CSRF security token for game actions.' },
+            { id: 'infrastructure', title: 'Companies & Holdings', desc: 'Holdings, factories, and resource bonuses.' },
+            { id: 'workforce', title: 'Employees', desc: 'Employee records and work history.' },
+            { id: 'storage', title: 'Storage', desc: 'Resource levels, items, and currencies.' },
+            { id: 'energy', title: 'Energy', desc: 'Energy levels, pool limits, and recovery status.' },
+            { id: 'intelligence', title: 'Productivity', desc: 'Regional productivity bonuses from external API. Used when Companies & Holdings auto-sync is OFF.' }
         ];
 
         container.innerHTML = modules.map(m => {
             const lastSync = AppState.syncMeta.timestamps[m.id];
-            const timeStr = lastSync ? new Date(lastSync).toLocaleString() : 'Never';
+            const timeStr = lastSync ? formatTimeAgo(lastSync) : 'Never';
             const auto = AppState.syncSettings[m.id].auto;
 
             return `
                 <div class="settings-card">
                     <h4>${m.title}</h4>
                     <span class="meta">${m.desc}</span>
-                    <div class="meta" style="margin-top:5px;">Last Sync: <strong>${timeStr}</strong></div>
+                    <div class="meta" style="margin-top:5px;">Last Sync: <strong class="sync-time" data-sync-id="${m.id}">${timeStr}</strong></div>
                     <div class="actions">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.75rem;">
                             <input type="checkbox" data-sync-id="${m.id}" class="auto-sync-toggle" ${auto ? 'checked' : ''}> Auto-Sync
@@ -1827,6 +2003,7 @@
                 else if (id === 'workforce') await syncWorkforce();
                 else if (id === 'storage') await syncStorage();
                 else if (id === 'energy') await syncEnergy();
+                else if (id === 'intelligence') await syncIntelligence(true);
                 el.disabled = false;
                 el.textContent = 'Sync Now';
             });
@@ -1837,11 +2014,10 @@
         const history = emp.workHistory || [0, 0, 0, 0, 0, 0, 0];
         let presenceHtml = '<div style="display:flex; align-items:center;">';
         history.forEach(h => {
-            let statusClass = 'dot-missed';
-            if (h > 0) statusClass = 'dot-worked';
-            else if (h === 0) statusClass = 'dot-pending';
-
-            presenceHtml += `<span class="presence-dot ${statusClass}" title="${h === -1 ? 'Missed' : h + ' works'}"></span>`;
+            const cls = h > 1 ? 'dot-multi' : h > 0 ? 'dot-worked' : h === 0 ? 'dot-pending' : 'dot-missed';
+            const label = h > 0 ? h : '';
+            const title = h === -1 ? 'Missed' : h === 0 ? 'Pending' : `${h} works`;
+            presenceHtml += `<span class="presence-dot ${cls}" title="${title}">${label}</span>`;
         });
         presenceHtml += '</div>';
 
@@ -1930,6 +2106,8 @@
             btnWam.disabled = true;
             summary.textContent = 'Select a specific holding to enable Work as Manager.';
             if (wamContainer) wamContainer.style.display = 'none';
+            AppState._wamEntries = [];
+            AppState._wamRegionIds = [];
             return;
         }
 
@@ -1947,11 +2125,17 @@
         }
         if (wamCountLabel) wamCountLabel.textContent = currentSelected;
 
+        const energyAffordable = Math.min(Math.floor(AppState.energyData.energy / 10), totalWorkable);
+        const btnSelectByEnergy = document.getElementById('btn-select-by-energy');
+        if (btnSelectByEnergy) btnSelectByEnergy.textContent = `Select by Energy (${energyAffordable})`;
+
         if (currentSelected === 0) {
             btnWam.disabled = true;
             summary.textContent = totalWorkable > 0
                 ? 'Select companies using the slider or table inputs to work.'
                 : 'No pending workable companies in this holding/filter combination.';
+            AppState._wamEntries = [];
+            AppState._wamRegionIds = [];
             return;
         }
 
@@ -1973,15 +2157,15 @@
             })
             .filter(Boolean);
         const { breakdown, rawProjected } = computeProductionEstimate(wamEntries);
-        const { html: estimatesHtml, hasNegativeBalance: wamNegBalance } = renderEstimateHtml(breakdown, rawProjected, getStockMap());
+        const { hasNegativeBalance: wamNegBalance } = renderEstimateHtml(breakdown, rawProjected, getStockMap());
 
-        summary.innerHTML = `Selection: <strong>${currentSelected}</strong> companies.<br>
-                             ${estimatesHtml}
-                             Energy Required: <strong style="color: ${hasEnergy ? 'var(--success-text)' : 'var(--danger-text)'}">${energyRequired}</strong>
-                             ${!hasEnergy ? ' <span style="font-size:0.65rem; color:var(--on-surface-variant)">(Requires Energy Bars)</span>' : ''}`;
+        AppState._wamEntries = wamEntries;
+        AppState._wamRegionIds = AppState.holdingsMap[holding] ? [AppState.holdingsMap[holding].region_id] : [];
+
+        summary.innerHTML = `Selection: <strong>${currentSelected}</strong> companies · Energy: <strong style="color:${hasEnergy ? 'var(--success-text)' : 'var(--danger-text)'}">${energyRequired}</strong>${!hasEnergy ? ' <span style="font-size:0.65rem;color:var(--on-surface-variant)">(bars needed)</span>' : ''}`;
         btnWam.disabled = !AppState.csrfToken || wamNegBalance;
         if (!AppState.csrfToken) summary.innerHTML += '<br><span style="color:var(--danger-text)">No CSRF Token. Please Sync.</span>';
-        if (wamNegBalance) summary.innerHTML += '<br><span style="color:var(--danger-text); font-size:0.65rem;">Insufficient raw materials.</span>';
+        if (wamNegBalance) summary.innerHTML += '<br><span style="color:var(--danger-text);font-size:0.65rem;">Insufficient raw materials.</span>';
     }
 
     function updateAssignUI() {
@@ -2036,7 +2220,18 @@
             AppState.virtualList.render();
         }
 
-        const { html: empEstimatesHtml, hasNegativeBalance: empNegBalance } = renderEstimateHtml(empBreakdown, rawProjectedEmp, getStockMap());
+        const { hasNegativeBalance: empNegBalance } = renderEstimateHtml(empBreakdown, rawProjectedEmp, getStockMap());
+
+        AppState._assignEntries = empEntries;
+        AppState._assignRegionIds = [...new Set(
+            AppState.filteredArr
+                .filter(c => c.can_assign_employees)
+                .map(c => {
+                    const hId = c.holding_company_id;
+                    return (hId && AppState.holdingsMap[hId]) ? AppState.holdingsMap[hId].region_id : null;
+                })
+                .filter(Boolean)
+        )];
 
         // Slot/action block — conditional
         const btnUseMax = document.getElementById('btn-use-max-emp');
@@ -2046,27 +2241,17 @@
             btnAssign.disabled = !AppState.csrfToken || empNegBalance || !poolReady;
             btnUseMax.disabled = !AppState.csrfToken || !poolReady;
             empAmount.max = poolReady ? Math.min(availableSlots, empAvailable || 0) : 0;
-            slotHtml = `<strong>${availableSlots}</strong> slots available across <strong>${assignableCompanies}</strong> companies.<br>${empEstimatesHtml}`;
-            if (empNegBalance) slotHtml += `<span style="color:var(--danger-text); font-size:0.65rem;">Insufficient raw materials.</span><br>`;
+            slotHtml = `<strong>${availableSlots}</strong> slots across <strong>${assignableCompanies}</strong> companies.`;
+            if (empNegBalance) slotHtml += `<br><span style="color:var(--danger-text);font-size:0.65rem;">Insufficient raw materials.</span>`;
         } else {
             btnAssign.disabled = true;
             btnUseMax.disabled = true;
-            slotHtml = `No available employee slots in this filter combination.<br>`;
+            slotHtml = `No available employee slots in this filter combination.`;
         }
-
-        // Resource block — always rendered
-        const storageUsed = AppState.pageDetails.storage_used || 0;
-        const storageTotal = AppState.pageDetails.storage_total || 0;
-        const storagePct = storageTotal > 0 ? Math.round(storageUsed / storageTotal * 100) : 0;
-        const storageColor = storagePct >= 90 ? 'var(--danger-text)' : 'var(--on-surface-variant)';
-        const storageHtml = storageTotal > 0
-            ? `<span style="font-size:0.65rem;color:${storageColor}">Storage: ${storageUsed.toLocaleString()} / ${storageTotal.toLocaleString()} (${storagePct}%)</span><br>`
-            : '';
 
         const poolNote = !poolReady ? ` <span style="color:var(--danger-text)">(infra sync required)</span>` : '';
         assignSummary.innerHTML = slotHtml
-            + storageHtml
-            + `<span style="font-size:0.65rem;color:var(--on-surface-variant)">Available works: <strong>${empAvailableDisplay}</strong>${poolNote}</span>`;
+            + `<br><span style="font-size:0.65rem;color:var(--on-surface-variant)">Available works: <strong>${empAvailableDisplay}</strong>${poolNote}</span>`;
     }
 
     function updateUpgradeUI() {
@@ -2163,9 +2348,60 @@
         btnOt.title = !hasOtEnergy ? `Insufficient energy (need ${otCost})` : '';
     }
 
+    // storageDelta: net units added to storage by planned production (prod - cons across all industries).
+    function renderStorageHtml(storageDelta = 0) {
+        const used = AppState.pageDetails.storage_used || 0;
+        const total = AppState.pageDetails.storage_total || 0;
+        if (total === 0) return '';
+
+        const hasDelta = storageDelta !== 0;
+        const projected = Math.round(used + storageDelta);
+        const displayUsed = hasDelta ? projected : used;
+        const pct = Math.round(displayUsed / total * 100);
+        const isOver = displayUsed > total;
+        const isWarn = !isOver && pct >= 90;
+        const color = (isOver || isWarn) ? 'var(--danger-text)' : 'var(--on-surface-variant)';
+
+        const deltaStr = hasDelta
+            ? ` <span style="font-size:0.6rem;color:var(--on-surface-variant)">(${used.toLocaleString()} + ${Math.round(storageDelta).toLocaleString()})</span>`
+            : '';
+        const overTag = isOver ? ' ⚠ over capacity' : '';
+        const pulseStyle = isOver ? ' class="balance-neg-pulse"' : '';
+
+        return `<span${pulseStyle} style="font-size:0.65rem;color:${color}">Storage: ${displayUsed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)${overTag}</span>${deltaStr}<br>`;
+    }
+
+    function updateResourceEstimate() {
+        const el = document.getElementById('resource-estimate');
+        if (!el) return;
+
+        const combined = [...(AppState._wamEntries || []), ...(AppState._assignEntries || [])];
+        // An empty combined array still yields a zeroed rawProjected, which lets renderEstimateHtml
+        // emit all four raw balance lines showing current stock even when nothing is selected.
+        const { breakdown, rawProjected } = computeProductionEstimate(combined);
+        const { html: estimatesHtml } = renderEstimateHtml(breakdown, rawProjected, getStockMap());
+
+        const noProdHtml = combined.length === 0
+            ? '<span style="font-size:0.65rem;color:var(--on-surface-variant)">No production planned.</span><br>'
+            : '';
+
+        // Raw units occupy 100 storage each; finished goods are 1:1.
+        // breakdown keys ending in '_raw' are raw producers (cons=0); others are finished goods.
+        const storageDelta = Object.entries(breakdown).reduce((sum, [key, t]) => {
+            const isRaw = key.endsWith('_raw');
+            return sum + (isRaw ? t.prod * 100 : t.prod - t.cons * 100);
+        }, 0);
+
+        const allRegionIds = [...new Set([...(AppState._wamRegionIds || []), ...(AppState._assignRegionIds || [])])];
+        const prodStatusHtml = renderProductivityStatusHtml(allRegionIds);
+
+        el.innerHTML = noProdHtml + estimatesHtml + renderStorageHtml(storageDelta) + prodStatusHtml;
+    }
+
     function updateActionUI() {
         updateWamUI();
         updateAssignUI();
+        updateResourceEstimate();
         updateUpgradeUI();
         updatePersonalWorkUI();
     }
@@ -2189,7 +2425,7 @@
         }
     }
 
-    async function syncCsrf() {
+    async function syncCsrf(silent = false) {
         return syncResource('CSRF',
             () => apiGet('https://www.erepublik.com/en'),
             async data => {
@@ -2199,16 +2435,18 @@
                 console.log(`[Sync] CSRF Token parsed: ${AppState.csrfToken.substring(0, 8)}...`);
                 await setDbValue('csrfToken', AppState.csrfToken);
                 updateSyncMeta('csrf');
-                showToast('CSRF Token updated.', 'success');
+                if (!silent) showToast('CSRF Token updated.', 'success');
                 return true;
             }
         );
     }
 
-    async function syncInfrastructure() {
+    async function syncInfrastructure(silent = false, skipReload = false) {
         return syncResource('Infrastructure',
             () => apiGet('https://www.erepublik.com/en/economy/myCompanies'),
             async data => {
+                // The game embeds company data as JS variable assignments in the HTML page, not as a JSON API.
+                // Regex extraction is the only available approach.
                 const companiesMatch = data.match(/var companies\s*=\s*(\{.*\});/);
                 if (!companiesMatch) return false;
                 const companies = JSON.parse(companiesMatch[1]);
@@ -2228,12 +2466,7 @@
                 const inv = await getDbValue('inventory');
                 if (Array.isArray(inv)) {
                     const main = inv.find(s => s.id === 'mainStorage');
-                    if (main && main.items) {
-                        const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
-                        main.items.forEach(item => {
-                            if (rawMap[item.industryId]) pageDetails[rawMap[item.industryId]] = item.amount;
-                        });
-                    }
+                    if (main) applyInventoryStocks(main, pageDetails);
                 }
 
                 await setDbValue('pageDetails', pageDetails);
@@ -2243,27 +2476,43 @@
                 const authoritativePool = parseInt(pageDetails.total_works || 0);
                 AppState.employeeWorkPool = authoritativePool;
                 await setDbValue('employeeWorkPool', authoritativePool);
-                // Reset delta tracking — next workforce sync re-establishes lastKnownWorksReceived.
-                AppState.lastKnownWorksReceivedDay = null;
-                AppState.lastKnownWorksReceived = 0;
-                await setDbValue('lastKnownWorksReceivedDay', null);
-                await setDbValue('lastKnownWorksReceived', 0);
-                console.log(`[WorkPool] Baseline set from infrastructure: ${authoritativePool}`);
+
+                // Preserve delta anchor if it's for the current game day.
+                // total_works already includes today's worksReceived, so resetting the anchor
+                // to 0 would cause the next workforce sync to double-count them.
+                const storedWorksReceivedDay = await getDbValue('lastKnownWorksReceivedDay');
+                const storedWorksReceived = await getDbValue('lastKnownWorksReceived') ?? 0;
+                const currentDay = AppState.syncMeta.lastDay; // set by workforce sync; 0 if never synced
+                if (currentDay > 0 && storedWorksReceivedDay === currentDay) {
+                    console.log(`[WorkPool] Baseline set to ${authoritativePool}. Anchor preserved at ${storedWorksReceived} works for day ${currentDay}.`);
+                } else {
+                    AppState.lastKnownWorksReceivedDay = null;
+                    AppState.lastKnownWorksReceived = 0;
+                    await setDbValue('lastKnownWorksReceivedDay', null);
+                    await setDbValue('lastKnownWorksReceived', 0);
+                    console.log(`[WorkPool] Baseline set to ${authoritativePool}. Anchor reset (previous day).`);
+                }
 
                 updateSyncMeta('infrastructure');
-                await loadDataFromDb();
-                showToast(`Infrastructure synced: ${Object.keys(companies).length} companies.`, 'success');
+                if (skipReload) {
+                    // Update what downstream syncs (e.g. syncIntelligence) depend on from AppState.
+                    AppState.companiesArr = Object.values(companies);
+                    AppState.holdingsMap = holdings;
+                } else {
+                    await loadDataFromDb();
+                }
+                if (!silent) showToast(`Infrastructure synced: ${Object.keys(companies).length} companies.`, 'success');
                 return true;
             }
         );
     }
 
-    async function syncWorkforce() {
+    async function syncWorkforce(silent = false, skipReload = false) {
         return syncResource('Workforce',
             () => apiGet('https://www.erepublik.com/en/economy/manage-employees-json', { 'X-Requested-With': 'XMLHttpRequest' }),
             async data => {
                 const employeeData = JSON.parse(data);
-                console.log(`[Sync] Workforce Parsed: ${employeeData.employees ? employeeData.employees.length : 0} operatives.`, employeeData);
+                console.log(`[Sync] Workforce Parsed: ${employeeData.employees ? employeeData.employees.length : 0} employees.`, employeeData);
                 if (!employeeData.employees) return false;
 
                 await setDbValue('employees', employeeData.employees);
@@ -2283,7 +2532,7 @@
                 if (AppState.employeeWorkPool !== null) {
                     let delta = 0;
                     if (AppState.lastKnownWorksReceivedDay === currentDay) {
-                        // Same day — only count increase since last sync
+                        // Math.max guards against the game correcting a prior overcount on the same day.
                         delta = Math.max(0, newWorksReceived - AppState.lastKnownWorksReceived);
                     } else {
                         // New day — all of today's worksReceived are new deposits
@@ -2301,46 +2550,40 @@
                 await setDbValue('lastKnownWorksReceived', newWorksReceived);
 
                 updateSyncMeta('workforce');
-                await loadDataFromDb();
-                showToast(`Workforce synced: ${employeeData.employees.length} operatives.`, 'success');
+                if (!skipReload) await loadDataFromDb();
+                if (!silent) showToast(`Employees synced: ${employeeData.employees.length} employees.`, 'success');
                 return true;
             }
         );
     }
 
-    async function syncStorage() {
+    async function syncStorage(silent = false) {
         return syncResource('Storage',
             () => apiGet('https://www.erepublik.com/en/economy/inventory-json', { 'X-Requested-With': 'XMLHttpRequest' }),
             async data => {
                 const inventory = JSON.parse(data);
-                console.log('[Sync] Logistics Parsed:', inventory);
+                console.log('[Sync] Storage Parsed:', inventory);
                 await setDbValue('inventory', inventory);
 
-                // Deep Sync: Propagate stock levels to pageDetails immediately
+                // pageDetails (from infrastructure sync) contains stale raw stock values.
+                // Overwrite them with authoritative inventory data whenever storage is synced.
                 if (Array.isArray(inventory)) {
                     const mainStorage = inventory.find(s => s.id === 'mainStorage');
-                    if (mainStorage && mainStorage.items) {
+                    if (mainStorage) {
                         const p = await getDbValue('pageDetails') || {};
-                        const rawMap = { 7: 'food_raw_stock', 12: 'weapon_raw_stock', 17: 'house_raw_stock', 24: 'airplane_raw_stock' };
-                        mainStorage.items.forEach(item => {
-                            if (rawMap[item.industryId]) p[rawMap[item.industryId]] = item.amount;
-                        });
-                        if (mainStorage.status) {
-                            p.storage_used = mainStorage.status.usedStorage || 0;
-                            p.storage_total = mainStorage.status.totalStorage || 0;
-                        }
+                        applyInventoryStocks(mainStorage, p);
                         await setDbValue('pageDetails', p);
                         console.log('[Sync] pageDetails stocks synchronized from Inventory.');
                     }
                 }
 
                 updateSyncMeta('storage');
-                showToast('Logistics (Storage) synced.', 'success');
+                if (!silent) showToast('Storage synced.', 'success');
                 return true;
             }
         );
     }
-    async function syncEnergy() {
+    async function syncEnergy(silent = false) {
         return syncResource('Energy',
             () => apiPost('https://www.erepublik.com/en/economy/energyRefill-getInventory', `_token=${AppState.csrfToken}`),
             async data => {
@@ -2361,50 +2604,70 @@
                 if (energyDisp) energyDisp.textContent = `Energy: ${energy.energy || '--'}`;
 
                 updateSyncMeta('energy');
-                showToast('Vitality (Energy) updated.', 'success');
+                if (!silent) showToast('Energy synced.', 'success');
                 return true;
             }
         );
     }
 
-    async function syncIntelligence() {
+    async function syncIntelligence(force = false, silent = false, skipReload = false) {
         return syncResource('Intelligence', null, async () => {
+            // Only query regions for holdings that actually contain companies.
+            // Holdings without companies (job market access only) don't need productivity data.
+            const holdingsWithCompanies = new Set(
+                AppState.companiesArr
+                    .filter(c => c.holding_company_id)
+                    .map(c => String(c.holding_company_id))
+            );
             const uniqueRegions = new Set();
-            Object.values(AppState.holdingsMap).forEach(h => uniqueRegions.add(h.region_id));
+            Object.values(AppState.holdingsMap)
+                .filter(h => holdingsWithCompanies.has(String(h.id)))
+                .forEach(h => uniqueRegions.add(h.region_id));
 
             const now = Date.now();
             let updateCount = 0;
 
+            // Build permalink → regionId map for stale regions only.
+            const permalinkToRegionId = {};
             for (const rId of uniqueRegions) {
                 const regionData = regionMap[rId];
                 if (!regionData || !regionData.permalink) continue;
-
-                // Cache Check (1 hour)
                 const cached = AppState.productivityCache[rId];
-                if (cached && (now - cached.timestamp < 3600000)) {
+                if (!force && cached && (now - cached.timestamp < 3600000)) {
                     console.log(`[Sync] Region ${rId} (${regionData.name}) using cached data.`);
                     continue;
                 }
+                permalinkToRegionId[regionData.permalink] = rId;
+            }
 
-                const apiRes = await apiGet(`https://productivityapi.curlybear.eu/productivity/?permalink=${regionData.permalink}`);
+            const stalePermalinks = Object.keys(permalinkToRegionId);
+            if (stalePermalinks.length > 0) {
+                const apiRes = await apiPostJson('https://productivityapi.curlybear.eu/productivity/query', { permalinks: stalePermalinks });
                 const dataArr = JSON.parse(apiRes);
-                if (Array.isArray(dataArr) && dataArr.length > 0) {
-                    AppState.productivityCache[rId] = { timestamp: now, data: dataArr[0] };
-                    updateCount++;
+                if (Array.isArray(dataArr)) {
+                    for (const entry of dataArr) {
+                        const rId = entry.permalink ? permalinkToRegionId[entry.permalink] : null;
+                        if (!rId) continue;
+                        AppState.productivityCache[rId] = { timestamp: now, data: entry };
+                        updateCount++;
+                    }
                 }
-                await sleep(300); // Respectful throttle
             }
 
             if (updateCount > 0) {
                 await setDbValue('productivityCache', AppState.productivityCache);
-                await loadDataFromDb();
+                if (!skipReload) await loadDataFromDb();
             }
 
+            const totalHoldings = Object.keys(AppState.holdingsMap).length;
+            const skipped = totalHoldings - holdingsWithCompanies.size;
             updateSyncMeta('intelligence');
-            showToast(`Intelligence updated: ${updateCount} regions refreshed.`, 'success');
+            if (!silent) showToast(`Productivity updated: ${updateCount} regions refreshed (${uniqueRegions.size} queried, ${skipped} empty holdings skipped).`, 'success');
             return true;
         });
-    } async function updateSyncMeta(key) {
+    }
+
+    async function updateSyncMeta(key) {
         AppState.syncMeta.timestamps[key] = Date.now();
         await setDbValue('syncMeta', AppState.syncMeta);
         if (AppState.activeTab === 'settings') renderSettingsTab();
@@ -2420,6 +2683,7 @@
         await setDbValue('pageDetails', pageDetails);
         AppState.syncMeta.lastDay = newDay;
         await setDbValue('syncMeta', AppState.syncMeta);
+        // Productivity bonuses change as territories are conquered/lost — stale cache is misleading.
         AppState.productivityCache = {};
         await setDbValue('productivityCache', {});
 
@@ -2427,29 +2691,30 @@
     }
 
     async function performGoldenLoad() {
-        console.log('[Sync] Initiating Full System Re-calibration...');
-        showToast('Initiating Full System Re-calibration...', 'info');
+        console.log('[Sync] Initiating Full Sync...');
+        showToast('Starting full sync...', 'info');
 
         const results = {
-            csrf: await syncCsrf(),
-            infrastructure: await syncInfrastructure(),
-            workforce: await syncWorkforce(),
-            storage: await syncStorage(),
-            energy: await syncEnergy(),
-            intelligence: await syncIntelligence()
+            csrf: await syncCsrf(true),
+            infrastructure: await syncInfrastructure(true, true),
+            storage: await syncStorage(true),
+            energy: await syncEnergy(true),
+            intelligence: await syncIntelligence(false, true, true),
+            workforce: await syncWorkforce(true, true)
         };
+        await loadDataFromDb();
 
         const failed = Object.entries(results).filter(([k, v]) => !v).map(([k]) => k);
         const successCount = Object.values(results).filter(v => v).length;
 
-        console.log(`[Sync] Full Calibration Complete. Successes: ${successCount}/6. Failed: ${failed.join(', ') || 'None'}`);
+        console.log(`[Sync] Full Sync complete. Successes: ${successCount}/${Object.keys(results).length}. Failed: ${failed.join(', ') || 'None'}`);
 
         if (failed.length === 0) {
-            showToast('Full System Calibration: SUCCESS (All modules active)', 'success');
+            showToast('Full sync complete.', 'success');
         } else if (successCount > 0) {
-            showToast(`Full System Calibration: PARTIAL (${failed.length} modules offline: ${failed.join(', ')})`, 'info');
+            showToast(`Full sync partial — failed: ${failed.join(', ')}`, 'info');
         } else {
-            showToast('Full System Calibration: FAILED (System remains offline)', 'error');
+            showToast('Full sync failed.', 'error');
         }
     }
 
@@ -2467,17 +2732,20 @@
         let useEnergyBar = false;
 
         if (AppState.energyData.energy < energyRequired) {
-            if (confirm(`Insufficient energy (${AppState.energyData.energy}/${energyRequired}). Use energy bars to complete work?`)) {
-                useEnergyBar = true;
-            } else {
-                return;
-            }
+            const useBar = await showConfirmModal(
+                'Insufficient Energy',
+                `<span style="color:#e74c3c">Current energy: <strong>${AppState.energyData.energy}</strong> / Required: <strong>${energyRequired}</strong></span><br><br>Use energy bars to complete work?`,
+                'Use Energy Bars'
+            );
+            if (!useBar) return;
+            useEnergyBar = true;
         }
 
         const holding = AppState.holdingsMap[holdingId];
         const hName = holding ? holding.name : 'Unknown';
 
         const confirmLines = [];
+        const confirmEntries = [];
         selectedGroups.forEach(group => {
             const sample = AppState.filteredArr.find(c => {
                 const fname = c.building_img.split('/').pop();
@@ -2488,6 +2756,7 @@
             const def = companyDefinitions[sample.building_img.split('/').pop()];
             const productivity = parseFloat(sample.effective_bonus) || 100;
             const totalProd = def.baseProduction * productivity / 100 * group.wamCount;
+            confirmEntries.push({ def, quality: group.quality, totalProd });
             const isRaw = group.industry.endsWith('_raw');
             const label = isRaw
                 ? `Q${group.quality} ${formatIndustryName(group.industry)}`
@@ -2497,8 +2766,31 @@
             confirmLines.push(line);
         });
 
-        const wamConfirmMsg = `Work as Manager in ${totalSelected} companies in ${hName}?\n\n${confirmLines.join('\n')}\n\nEnergy required: ${energyRequired}`;
-        if (!confirm(wamConfirmMsg)) return;
+        const { rawProjected: confRawProj } = computeProductionEstimate(confirmEntries);
+        const confStockMap = getStockMap();
+        const affectedRaws = Object.entries(confRawProj).filter(([, s]) => s.produced > 0 || s.consumed > 0);
+        let balanceHtml = '';
+        if (affectedRaws.length > 0) {
+            balanceHtml = `<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);font-size:0.75rem;">`;
+            affectedRaws.forEach(([type, stats]) => {
+                const current = confStockMap[type] || 0;
+                const final = current + stats.produced - stats.consumed;
+                const isNeg = final < 0;
+                const color = isNeg ? 'var(--danger-text)' : 'var(--success-text)';
+                balanceHtml += `<span style="color:var(--on-surface-variant)">${type}: ${current.toLocaleString()} → <strong style="color:${color}">${Math.floor(final).toLocaleString()}</strong></span><br>`;
+            });
+            balanceHtml += '</div>';
+        }
+
+        const wamLinesHtml = confirmLines.map(l =>
+            `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:0.75rem;color:var(--on-surface-variant)">${l}</div>`
+        ).join('');
+        const wamBodyHtml =
+            `<div style="margin-bottom:10px">Work as Manager in <strong>${totalSelected} companies</strong> in <strong>${hName}</strong></div>` +
+            `<div style="margin-bottom:10px">${wamLinesHtml}</div>` +
+            `<div>Energy required: <strong>${energyRequired}</strong></div>` +
+            balanceHtml;
+        if (!await showConfirmModal('Work as Manager', wamBodyHtml, 'Work')) return;
 
         const btnWam = document.getElementById('btn-wam');
         btnWam.disabled = true;
@@ -2560,6 +2852,11 @@
             }
 
             if (res.status === true) {
+                // Clear prediction entries before any await — prevents the estimate from seeing
+                // both updated stocks AND stale entries during the await chain below.
+                AppState._wamEntries = [];
+                AppState._wamRegionIds = [];
+
                 AppState.energyData.energy = Math.max(0, AppState.energyData.energy - energyRequired);
                 affectedCompanies.forEach(c => c.already_worked = true);
 
@@ -2585,7 +2882,10 @@
 
                 Object.entries(typeMap).forEach(([ind, stats]) => {
                     const rName = RAW_NAMES[ind.replace('_raw', '')];
-                    const delta = stats.p - stats.c;
+                    // Raw companies produce raw (delta = +produced). Finished goods companies
+                    // consume raw (delta = -consumed). stats.p for finished goods is in finished
+                    // goods units, not raw units — mixing them was the bug.
+                    const delta = ind.endsWith('_raw') ? stats.p : -stats.c;
                     if (delta !== 0) {
                         deltas[rName] = (deltas[rName] || 0) + delta;
                         if (rName === 'FRM') p.food_raw_stock = (p.food_raw_stock || 0) + delta;
@@ -2697,17 +2997,23 @@
         }).filter(Boolean);
         const { breakdown: empBreakdownLocal, rawProjected: rawProjectedEmpLocal } = computeProductionEstimate(confirmEntries);
 
-        let confirmMsg = `Assign and work ${amount - left} employees in ${companyCount} companies?\n\n`;
+        const assignLines = [];
         Object.entries(empBreakdownLocal).forEach(([key, t]) => {
             if (t.prod > 0) {
                 const pct = empProductivityMap[key] || 100;
-                confirmMsg += `${t.label} (${parseFloat(pct).toFixed(2)}%) — Est. ${t.prod.toFixed(2)} units`;
-                if (t.cons > 0) confirmMsg += ` (Uses ${t.cons.toFixed(2)} ${t.rawType})`;
-                confirmMsg += '\n';
+                let line = `${t.label} (${parseFloat(pct).toFixed(2)}%) — Est. ${t.prod.toFixed(2)} units`;
+                if (t.cons > 0) line += ` (Uses ${t.cons.toFixed(2)} ${t.rawType})`;
+                assignLines.push(line);
             }
         });
+        const assignLinesHtml = assignLines.map(l =>
+            `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:0.75rem;color:var(--on-surface-variant)">${l}</div>`
+        ).join('');
+        const assignBodyHtml =
+            `<div style="margin-bottom:10px">Assign and work <strong>${amount - left} employees</strong> in <strong>${companyCount} companies</strong></div>` +
+            `<div>${assignLinesHtml}</div>`;
 
-        if (!confirm(confirmMsg)) {
+        if (!await showConfirmModal('Employee Assignment', assignBodyHtml, 'Assign & Work')) {
             btnAssign.disabled = false;
             btnAssign.textContent = 'Assign & Work';
             return;
@@ -2724,6 +3030,9 @@
                 return;
             }
             if (res.status === true) {
+                AppState._assignEntries = [];
+                AppState._assignRegionIds = [];
+
                 showToast(`Successfully worked ${amount - left} employees!`, 'success');
 
                 const fullCompanies = await getDbValue('companies');
@@ -2821,12 +3130,14 @@
         const industry = AppState.filters.industry;
         const currentQ = AppState.filters.quality;
 
-        const confirmMsg =
-            `Upgrade ${toUpgrade.length}× ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}\n` +
-            `${hName} · ${regionData.name}\n` +
-            `Cost: ${totalCost.toLocaleString()} Gold`;
+        const upgradeBodyHtml =
+            `<div style="display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:0.8rem;">` +
+            `<span style="color:var(--on-surface-variant)">Companies</span><span><strong>${toUpgrade.length}×</strong> ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}</span>` +
+            `<span style="color:var(--on-surface-variant)">Location</span><span>${hName} · ${regionData.name}</span>` +
+            `<span style="color:var(--on-surface-variant)">Cost</span><span style="color:#fabd00;font-weight:600;">${totalCost.toLocaleString()} Gold</span>` +
+            `</div>`;
 
-        if (!confirm(confirmMsg)) return;
+        if (!await showConfirmModal('Mass Upgrade', upgradeBodyHtml, 'Upgrade')) return;
 
         const btn = document.getElementById('btn-mass-upgrade');
         btn.disabled = true;
@@ -2910,6 +3221,23 @@
                 }
             });
             await setDbValue('companies', fullCompanies);
+
+            // Deduct gold cost from inventory so loadDataFromDb reads the correct balance
+            const actualGoldSpent = toUpgrade
+                .filter(c => successIds.includes(c.id))
+                .reduce((sum, c) => sum + parseInt((c.upgrades && c.upgrades[targetQ] && c.upgrades[targetQ].cost) || 0), 0);
+            if (actualGoldSpent > 0) {
+                const inv = await getDbValue('inventory');
+                if (Array.isArray(inv)) {
+                    const main = inv.find(s => s.id === 'mainStorage');
+                    const goldItem = main && main.items ? main.items.find(i => i.id === 'gold') : null;
+                    if (goldItem) {
+                        goldItem.amount = Math.max(0, goldItem.amount - actualGoldSpent);
+                        await setDbValue('inventory', inv);
+                    }
+                }
+            }
+
             await loadDataFromDb(); // Re-render UI from updated local DB
         }
 
@@ -2958,10 +3286,11 @@
         const nextOt = AppState.pageDetails.next_overtime_work || 0;
         const energyCost = (now < nextOt) ? 100 : 10;
 
-        const warningPrefix = energyCost === 100
-            ? `⚠ Careful! This overtime will cost 100 energy (not 10).\n\n`
+        const otWarningHtml = energyCost === 100
+            ? `<div style="margin-bottom:10px;padding:8px 10px;background:rgba(192,57,43,0.15);border-left:2px solid #c0392b;color:#e74c3c;font-size:0.75rem;">Careful — this overtime will cost <strong>100 energy</strong>, not 10.</div>`
             : '';
-        if (!confirm(`${warningPrefix}Work overtime? This will cost ${energyCost} energy.`)) return;
+        const otBodyHtml = `${otWarningHtml}<div>Work overtime? This will cost <strong>${energyCost} energy</strong>.</div>`;
+        if (!await showConfirmModal('Overtime Work', otBodyHtml, 'Work Overtime', energyCost === 100)) return;
 
         const btn = document.getElementById('btn-work-ot');
         btn.disabled = true; btn.textContent = 'Working...';
@@ -3011,6 +3340,41 @@
             toast.classList.add('fade-out');
             setTimeout(() => toast.remove(), 300);
         }, 4000);
+    }
+
+    function showConfirmModal(title, bodyHtml, confirmLabel = 'Confirm', danger = false) {
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:100000;display:flex;align-items:center;justify-content:center;';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'background:#1a1d20;border:1px solid rgba(255,255,255,0.12);min-width:320px;max-width:520px;width:90vw;font-family:Inter,sans-serif;color:#e8eaed;';
+
+            const confirmColor = danger ? '#c0392b' : '#fabd00';
+            const confirmTextColor = danger ? '#fff' : '#121416';
+            modal.innerHTML = `
+                <div style="background:#242729;padding:13px 18px;border-bottom:1px solid rgba(255,255,255,0.08);">
+                    <span style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:0.8125rem;color:#fabd00;text-transform:uppercase;letter-spacing:0.5px;">${title}</span>
+                </div>
+                <div style="padding:16px 18px;font-size:0.8rem;line-height:1.6;">${bodyHtml}</div>
+                <div style="padding:10px 18px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;">
+                    <button class="ccm-cancel" style="padding:6px 16px;background:transparent;border:1px solid rgba(255,255,255,0.18);color:#aaa;font-size:0.8rem;cursor:pointer;font-family:Inter,sans-serif;">Cancel</button>
+                    <button class="ccm-confirm" style="padding:6px 16px;background:${confirmColor};border:none;color:${confirmTextColor};font-size:0.8rem;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;">${confirmLabel}</button>
+                </div>
+            `;
+
+            let keyHandler;
+            const cleanup = result => { document.removeEventListener('keydown', keyHandler); overlay.remove(); resolve(result); };
+            keyHandler = e => { if (e.key === 'Escape') cleanup(false); };
+            document.addEventListener('keydown', keyHandler);
+            modal.querySelector('.ccm-cancel').addEventListener('click', () => cleanup(false));
+            modal.querySelector('.ccm-confirm').addEventListener('click', () => cleanup(true));
+            overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(false); });
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+            modal.querySelector('.ccm-confirm').focus();
+        });
     }
 
     // ==========================================
