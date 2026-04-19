@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.7
+// @version      0.8
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -981,38 +981,33 @@
     function updateTycoonDisplay() {
         const el = document.getElementById('tycoon-display');
         if (!el) return;
-        if (!AppState.tycoonBonus) {
-            el.textContent = 'Tycoon: Inactive';
-            el.style.color = 'var(--on-surface-variant)';
-            return;
-        }
+        const inactiveBadge = `<span style="font-size:11px;color:var(--red);background:rgba(224,87,87,0.1);border:1px solid rgba(224,87,87,0.2);border-radius:100px;padding:1px 8px;font-family:'JetBrains Mono',monospace;">Inactive</span>`;
+        if (!AppState.tycoonBonus) { el.innerHTML = inactiveBadge; return; }
         const { isActive, remainingSeconds, isCritical } = getTycoonStatus();
-        if (!isActive) {
-            el.textContent = 'Tycoon: Inactive';
-            el.style.color = 'var(--on-surface-variant)';
-            return;
-        }
+        if (!isActive) { el.innerHTML = inactiveBadge; return; }
         const countdown = formatCountdown(remainingSeconds);
-        if (isCritical) {
-            el.innerHTML = `⚠ Tycoon: +${AppState.tycoonBonus}% — ${countdown}`;
-            el.style.color = '#ff4444';
-        } else {
-            el.textContent = `Tycoon: +${AppState.tycoonBonus}% — ${countdown}`;
-            el.style.color = 'var(--secondary)';
-        }
+        const color = isCritical ? '#ff4444' : 'var(--green)';
+        const prefix = isCritical ? '⚠ ' : '';
+        el.innerHTML = `<span style="font-size:11px;color:${color};background:rgba(76,175,125,0.1);border:1px solid rgba(76,175,125,0.2);border-radius:100px;padding:1px 8px;font-family:'JetBrains Mono',monospace;">${prefix}+${AppState.tycoonBonus}% — ${countdown}</span>`;
     }
 
     function updateWalletDisplay() {
         const el = document.getElementById('wallet-display');
         if (!el) return;
-        const lines = [];
-        if (AppState.gold !== null) lines.push(`<span style="color:var(--primary);font-size:13px;font-weight:bold;">${AppState.gold.toLocaleString()} Gold</span>`);
-        if (AppState.cc !== null) {
-            const ccName = AppState.employeeOverview.currency || 'CC';
-            lines.push(`<span style="color:var(--secondary);font-size:11px;">${AppState.cc.toLocaleString()} ${ccName}</span>`);
+        const mono = `font-family:'JetBrains Mono',monospace;`;
+        const parts = [];
+        if (AppState.gold !== null) {
+            parts.push(`<span style="${mono}font-size:13px;font-weight:600;color:#f0c040;">${AppState.gold.toLocaleString()}</span>`);
+            parts.push(`<span style="${mono}font-size:11px;color:var(--muted);">Gold</span>`);
         }
-        el.innerHTML = lines.length > 0
-            ? `<span style="display:flex;flex-direction:column;align-items:flex-end;line-height:1.3;">${lines.join('')}</span>`
+        if (AppState.cc !== null) {
+            if (parts.length) parts.push(`<span style="width:1px;height:12px;background:var(--border);display:inline-block;margin:0 2px;"></span>`);
+            const ccName = AppState.employeeOverview.currency || 'CC';
+            parts.push(`<span style="${mono}font-size:13px;font-weight:600;color:var(--dim);">${AppState.cc.toLocaleString()}</span>`);
+            parts.push(`<span style="${mono}font-size:11px;color:var(--muted);">${ccName}</span>`);
+        }
+        el.innerHTML = parts.length > 0
+            ? `<span style="display:inline-flex;align-items:center;gap:4px;">${parts.join('')}</span>`
             : '';
     }
 
@@ -1074,22 +1069,32 @@
 
     // Returns { html, hasNegativeBalance } — negative balance spans get pulse animation class.
     function renderEstimateHtml(breakdown, rawProjected, stockMap) {
+        const row = (label, value, color) =>
+            `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">` +
+            `<span style="color:var(--muted);font-size:11px;">${label}</span>` +
+            `<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${color};">${value}</span>` +
+            `</div>`;
         let html = '';
         let hasNegativeBalance = false;
+        let hasProduction = false;
         Object.values(breakdown).forEach(t => {
             if (t.prod > 0) {
-                const consLine = t.cons > 0 ? ` (Uses ${t.cons.toFixed(2)} ${t.rawType})` : '';
-                html += `Est. ${t.label}: <strong>${t.prod.toFixed(2)}</strong>${consLine}<br>`;
+                hasProduction = true;
+                const consLine = t.cons > 0 ? ` (${t.cons.toFixed(0)} ${t.rawType})` : '';
+                html += row(`Est. ${t.label}`, `${t.prod.toFixed(1)}${consLine}`, 'var(--accent)');
             }
         });
+        if (!hasProduction) {
+            html += row('Status', 'No production planned', 'var(--dim)');
+        }
         Object.entries(rawProjected).forEach(([type, stats]) => {
             const current = (stockMap && stockMap[type]) || 0;
             const final = current + stats.produced - stats.consumed;
             const isNeg = final < 0;
             if (isNeg) hasNegativeBalance = true;
-            const color = isNeg ? 'var(--danger-text)' : 'var(--success-text)';
-            const pulseClass = isNeg ? ' class="balance-neg-pulse"' : '';
-            html += `<span style="font-size:0.65rem; color:var(--on-surface-variant)">${type} Balance: <strong${pulseClass} style="color:${color}">${Math.floor(final).toLocaleString()}</strong></span><br>`;
+            const color = isNeg ? 'var(--red)' : 'var(--accent)';
+            const pulse = isNeg ? ' class="balance-neg-pulse"' : '';
+            html += row(`${type} Balance`, `<strong${pulse} style="color:${color}">${Math.floor(final).toLocaleString()}</strong>`, color);
         });
         return { html, hasNegativeBalance };
     }
@@ -1103,238 +1108,200 @@
         document.body.innerHTML = '';
         document.head.innerHTML = `
             <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+                *, *::before, *::after { box-sizing: border-box; }
                 :root {
-                    --surface: #121416;
-                    --surface-container-lowest: #0c0e10;
-                    --surface-container-low: #1a1c1e;
-                    --surface-container: #232527;
-                    --surface-container-high: #282a2c;
-                    --surface-container-highest: #333537;
-                    --surface-bright: #38393c;
-                    --primary: #fabd00;
-                    --on-primary-container: #c09000;
-                    --on-primary-fixed: #261a00;
-                    --secondary: #b4cad6;
-                    --outline: #454652;
-                    --text-main: #f8fafc;
-                    --on-surface-variant: #c6c5d4;
-                    --success-container: #00390a;
-                    --success-text: #48ab4d;
-                    --danger-container: #93000a;
-                    --danger-text: #ffdad6;
+                    --bg:       #090c12;
+                    --bg2:      #0f1420;
+                    --bg3:      #141926;
+                    --surface:  #1a2133;
+                    --surface2: #202840;
+                    --border:   rgba(255,255,255,0.07);
+                    --border2:  rgba(255,255,255,0.12);
+                    --accent:   #ff9800;
+                    --accent-dim: rgba(255,152,0,0.10);
+                    --text:     #e8eaf0;
+                    --muted:    #8896b0;
+                    --dim:      #a8b2c8;
+                    --green:    #4caf7d;
+                    --red:      #e05757;
+                    --gold:     #f0c040;
+                    /* Legacy aliases for inline JS styles */
+                    --primary:                  #ff9800;
+                    --secondary:                #8b93aa;
+                    --text-main:                #e8eaf0;
+                    --on-surface-variant:       #6b7592;
+                    --success-text:             #4caf7d;
+                    --danger-text:              #e05757;
+                    --success-container:        rgba(76,175,125,0.12);
+                    --danger-container:         rgba(224,87,87,0.12);
+                    --surface-container-lowest: #090c12;
+                    --surface-container-low:    #1a2133;
+                    --surface-container:        #141926;
+                    --surface-container-high:   #1a2133;
+                    --surface-container-highest:#202840;
+                    --surface-bright:           #202840;
+                    --surface-variant:          #141926;
+                    --outline:                  rgba(255,255,255,0.07);
+                    --warning:                  #ff9800;
                     --spacing-1: 5px;
                     --spacing-2: 10px;
                 }
-                body {
-                    background: url('https://www.erepublik.net/images/modules/myland/bg_pattern.png') var(--surface) !important;
-                    background-blend-mode: overlay !important;
-                    color: var(--text-main) !important;
-                    font-family: 'Inter', system-ui, sans-serif !important;
-                    margin: 0 !important;
-                    padding: 20px !important;
+                html, body { height: 100%; overflow: hidden; margin: 0 !important; padding: 0 !important; background: var(--bg) !important; }
+                body { font-family: 'Space Grotesk', sans-serif; color: var(--text); font-size: 13px; }
+                #ccm-root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; position: relative; background: var(--bg); }
+                #ccm-root::before {
+                    content: ''; position: fixed; inset: 0;
+                    background-image: linear-gradient(rgba(255,152,0,0.012) 1px, transparent 1px), linear-gradient(90deg, rgba(255,152,0,0.012) 1px, transparent 1px);
+                    background-size: 60px 60px; pointer-events: none; z-index: 0;
                 }
-                #app { max-width: 1400px; margin: 0 auto; }
-                
-                h1, h2, h3, h4 { font-family: 'Space Grotesk', sans-serif; }
-                h1 { margin: 0; font-size: 24px; color: #fff; text-shadow: 0 0 10px rgba(250, 189, 0, 0.2); }
-                h3 { margin-top: 0; margin-bottom: 15px; font-weight: 500; font-size: 16px; color: var(--text-main); }
-                
-                .header {
-                    display: flex; justify-content: space-between; align-items: center;
-                    border-bottom: 2px solid rgba(69, 70, 82, 0.15);
-                    padding-bottom: 20px; margin-bottom: 20px;
-                }
-                
-                .btn {
-                    background: linear-gradient(135deg, var(--primary), var(--on-primary-container));
-                    color: var(--on-primary-fixed); border: none; padding: 10px 20px;
-                    border-radius: 0.125rem; cursor: pointer; font-weight: 600; font-size: 14px;
-                    font-family: 'Inter', sans-serif;
-                    transition: transform 0.2s, opacity 0.2s, box-shadow 0.2s;
-                    box-shadow: 0 4px 15px rgba(250, 189, 0, 0.15);
-                }
-                .btn:hover:not(:disabled) { 
-                    transform: translateY(-1px);
-                    box-shadow: 0 6px 20px rgba(250, 189, 0, 0.3);
-                }
-                .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
-                
-                .btn-secondary {
-                    background: transparent;
-                    border: 1px solid rgba(69, 70, 82, 0.2);
-                    color: var(--secondary);
-                    box-shadow: none;
-                }
-                .btn-secondary:hover:not(:disabled) {
-                    border-color: var(--outline);
-                    background: rgba(69, 70, 82, 0.1);
-                    transform: translateY(0);
-                }
-
-                .layout { display: grid; grid-template-columns: 320px 1fr; gap: 20px; height: calc(100vh - 120px); }
-                
-                .panel { 
-                    background: rgba(12, 14, 16, 0.85);
-                    backdrop-filter: blur(12px);
-                    padding: 20px; border-radius: 0.25rem; 
-                    display: flex; flex-direction: column;
-                    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(250, 189, 0, 0.04);
-                }
-                
-                .form-group { margin-bottom: var(--spacing-2); }
-                .form-group label { display: block; margin-bottom: var(--spacing-1); font-size: 0.75rem; color: var(--on-surface-variant); font-weight: 500; }
-                .form-control {
-                    width: 100%; padding: 8px 12px; background: var(--surface-container-highest); 
-                    border: none; border-bottom: 2px solid transparent;
-                    color: #fff; border-radius: 2px 2px 0 0; box-sizing: border-box; font-size: 0.75rem;
-                    transition: border-bottom-color 0.2s;
-                }
-                .form-control:focus { outline: none; border-bottom-color: var(--primary); }
-                
-                #list-container, #employee-list-container { flex: 1; min-height: 0; background: transparent; }
+                #ccm-root > * { position: relative; z-index: 1; }
+                ::-webkit-scrollbar { width: 5px; height: 5px; }
+                ::-webkit-scrollbar-track { background: transparent; }
+                ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 4px; }
+                /* Top bar */
+                #ccm-topbar { height: 52px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: rgba(9,12,18,0.9); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
+                .ccm-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+                .ccm-topbar-left { display: flex; align-items: center; gap: 12px; }
+                .ccm-topbar-right { display: flex; align-items: center; gap: 20px; }
+                .ccm-bar-sep { width: 1px; height: 16px; background: var(--border); }
+                .ccm-topbar-item { display: flex; align-items: center; gap: 5px; }
+                .ccm-item-label { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--muted); }
+                /* Body layout */
+                #ccm-body { flex: 1; display: flex; overflow: hidden; background: var(--bg); }
+                /* Sidebar */
+                #ccm-sidebar { width: 20%; flex-shrink: 0; border-right: 1px solid var(--border); padding: 20px 16px; overflow-y: auto; background: rgba(15,20,32,0.6); }
+                .ccm-section-title { font-size: 11px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+                .ccm-label { font-size: 10px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 6px; }
+                .ccm-divider { border-top: 1px solid var(--border); margin: 18px 0; }
+                .ccm-field { margin-bottom: 10px; }
+                .ccm-help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border: 1px solid var(--muted); border-radius: 50%; font-size: 9px; color: var(--muted); cursor: help; }
+                /* Form controls */
+                .ccm-select, .form-control { width: 100%; background: var(--bg2); border: 1px solid var(--border2); border-radius: 6px; color: var(--text); padding: 7px 10px; font-size: 12px; font-family: 'Space Grotesk', sans-serif; appearance: none; outline: none; cursor: pointer; box-sizing: border-box; transition: border-color 0.2s; }
+                .ccm-select:focus, .form-control:focus { border-color: var(--accent); }
+                .ccm-input { width: 100%; background: var(--bg2); border: 1px solid var(--border2); border-radius: 6px; color: var(--text); padding: 7px 10px; font-size: 12px; font-family: 'Space Grotesk', sans-serif; outline: none; box-sizing: border-box; transition: border-color 0.2s; }
+                .ccm-input:focus { border-color: var(--accent); }
+                /* Buttons */
+                .btn { padding: 8px 14px; border-radius: 7px; border: none; cursor: pointer; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 12px; transition: all 0.18s; display: inline-flex; align-items: center; gap: 6px; letter-spacing: 0.01em; background: var(--accent); color: #090c12; }
+                .btn:hover:not(:disabled) { opacity: 0.88; }
+                .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+                .btn-secondary { background: var(--surface2); color: var(--dim); border: 1px solid var(--border2); }
+                .btn-ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
+                #btn-sync { padding: 7px 14px; font-weight: 700; }
+                #btn-sync.syncing { background: rgba(255,152,0,0.15); color: var(--accent); border: 1px solid rgba(255,152,0,0.3); }
+                #btn-sync.syncing .btn-sync-icon { animation: spin 1s linear infinite; }
+                /* Main */
+                #ccm-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 20px 24px; background: var(--bg); }
+                /* Tabs */
+                .tabs { display: flex; gap: 2px; margin-bottom: 22px; border-bottom: 1px solid var(--border); }
+                .tab { padding: 8px 18px; background: transparent; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--muted); font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 13px; cursor: pointer; transition: all 0.15s; text-transform: capitalize; }
+                .tab:hover { color: var(--text); }
+                .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+                /* Table containers */
+                #list-container, #employee-list-container { flex: 1; min-height: 0; }
                 #tab-companies, #tab-employees { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-                
-                .company-table { width: 100%; border-collapse: separate; border-spacing: 0 var(--spacing-1); table-layout: fixed; }
-                .company-table th, .company-table td { 
-                    text-align: left; padding: 10px 15px; 
-                    text-overflow: ellipsis; white-space: nowrap; overflow: hidden; font-size: 0.75rem;
-                }
-                .company-table td { height: 40px; box-sizing: border-box; background: var(--surface-container-low); }
-                .company-table tbody tr:hover td { background: var(--surface-bright); }
-                
-                .header-row { display: flex; background: var(--surface-container-highest); font-weight: 600; font-size: 0.75rem; padding-right: 15px; border-radius: 0.125rem;}
-                .header-row div { padding: 10px 15px; text-align: left; overflow: hidden; white-space: nowrap; color: var(--on-surface-variant); font-family: 'Space Grotesk', sans-serif; letter-spacing: 0.5px; text-transform: uppercase; font-size: 0.6875rem; }
-                
-                .tabs {
-                    display: flex; gap: 10px; margin-bottom: 20px;
-                    border-bottom: 1px solid var(--outline);
-                }
-                .tab {
-                    padding: 10px 20px; cursor: pointer; font-family: 'Space Grotesk', sans-serif;
-                    font-size: 0.875rem; font-weight: 500; color: var(--on-surface-variant);
-                    border-bottom: 2px solid transparent; transition: all 0.2s;
-                }
-                .tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
-                .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-
-                /* Settings Panel */
-                .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-                .settings-card { 
-                    background: var(--surface-container-low); border-radius: 4px; padding: 20px; 
-                    border: 1px solid var(--outline); display: flex; flex-direction: column; gap: 15px;
-                }
-                .settings-card h4 { margin: 0; color: var(--primary); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 1px; }
-                .settings-card .meta { font-size: 0.75rem; color: var(--on-surface-variant); }
+                /* Table header */
+                .header-row { display: flex; background: var(--bg3); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+                .header-row div { padding: 10px 14px; overflow: hidden; white-space: nowrap; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em; text-transform: uppercase; font-size: 10px; color: var(--muted); cursor: default; user-select: none; }
+                /* Company table */
+                .company-table { width: 100%; border-collapse: collapse; table-layout: fixed; background: var(--bg); }
+                .company-table td { padding: 0 14px; overflow: hidden; white-space: nowrap; font-size: 13px; box-sizing: border-box; border-bottom: 1px solid var(--border); background: var(--bg); }
+                .company-table tbody tr { transition: background 0.12s; cursor: default; }
+                .company-table tbody tr:nth-child(even) td { background: rgba(255,255,255,0.014); }
+                .company-table tbody tr:hover td { background: rgba(255,152,0,0.04) !important; }
+                /* Column widths — header divs and table cells share these */
+                .col-industry { width: 28%; }
+                .col-count { width: 8%; text-align: center; }
+                .col-prod { width: 16%; }
+                .col-emp { width: 13%; text-align: center; }
+                .col-hold { width: 20%; }
+                .col-stat { width: 15%; text-align: right; }
+                /* Employee table legacy columns */
+                .col-name { width: 35%; }
+                .col-q { width: 20%; }
+                /* Status chips */
+                .status-chip { display: inline-block; padding: 2px 9px; border-radius: 100px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+                .chip-success { background: rgba(76,175,125,0.1); color: var(--green); border: 1px solid rgba(76,175,125,0.25); }
+                .chip-danger { background: rgba(224,87,87,0.12); color: var(--red); border: 1px solid rgba(224,87,87,0.25); }
+                /* Summary text */
+                .summary { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+                /* Settings */
+                .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+                .settings-card { background: var(--surface); border-radius: 8px; padding: 16px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; }
+                .settings-card h4 { margin: 0; color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
+                .settings-card .meta { font-size: 12px; color: var(--muted); }
                 .settings-card .actions { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
-
-                .summary-bar {
-                    display: flex; gap: 30px; background: var(--surface-container-low);
-                    padding: 15px 20px; border-radius: 0.25rem; margin-bottom: 20px;
-                    border-left: 4px solid var(--primary);
-                }
-                .summary-item { display: flex; flex-direction: column; gap: 4px; }
-                .summary-item .label { font-size: 0.6875rem; text-transform: uppercase; color: var(--on-surface-variant); font-weight: 600; }
-                .summary-item .value { font-size: 1.125rem; font-weight: 700; color: #fff; }
-
-                .presence-dot {
-                    display: inline-flex; align-items: center; justify-content: center;
-                    width: 14px; height: 14px; border-radius: 50%;
-                    font-size: 0.5rem; font-weight: 700; line-height: 1;
-                    margin-right: 4px; color: #121416;
-                }
-                .dot-worked { background: var(--success-text); box-shadow: 0 0 5px var(--success-text); }
-                .dot-missed { background: var(--danger-container); box-shadow: 0 0 5px var(--danger-container); }
-                .dot-pending { background: var(--outline); box-shadow: 0 0 5px var(--outline); }
-                .dot-multi { background: #fabd00; box-shadow: 0 0 5px #fabd00; }
-
-                #toast-container {
-                    position: fixed; bottom: 20px; right: 20px;
-                    display: flex; flex-direction: column; gap: 10px; z-index: 10000;
-                }
-                .toast {
-                    background: rgba(12, 14, 16, 0.95); backdrop-filter: blur(8px);
-                    color: #fff; padding: 12px 20px; border-radius: 4px;
-                    border-left: 4px solid var(--primary);
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-                    font-size: 0.8125rem; min-width: 250px;
-                    display: flex; justify-content: space-between; align-items: center;
-                    animation: toast-in 0.3s ease-out;
-                }
-                .toast.error { border-left-color: #ffdad6; }
-                .toast.success { border-left-color: #48ab4d; }
-                @keyframes toast-in {
-                    from { transform: translateX(100%); opacity: 0; }
-                    to { transform: translateX(0); opacity: 1; }
-                }
-                @keyframes balance-pulse {
-                    0%, 100% { opacity: 1; }
-                    50% { opacity: 0.35; }
-                }
-                .balance-neg-pulse {
-                    animation: balance-pulse 1s ease-in-out infinite;
-                }
-                .toast.fade-out {
-                    opacity: 0; transform: translateX(100%);
-                    transition: opacity 0.3s, transform 0.3s;
-                }
-
-                .col-name { width: 40%; }
-                .col-emp { width: 15%; }
-                .col-hold { width: 25%; }
-                .col-stat { width: 20%; }
-                
-                .summary { font-size: 0.75rem; color: var(--on-surface-variant); margin-bottom: 15px; line-height: 1.4; }
-                
-                .status-chip {
-                    display: inline-block; padding: 2px 8px; border-radius: 0.125rem; font-size: 0.6875rem; font-weight: 600;
-                }
-                .chip-success { background: var(--success-container); color: var(--success-text); }
-                .chip-danger { background: var(--danger-container); color: var(--danger-text); }
-                
-                .info-tooltip {
-                    position: relative; display: inline-block; cursor: help;
-                    margin-left: 5px; color: var(--secondary);
-                }
-                .info-tooltip:hover::after {
-                    content: attr(data-tip);
-                    position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%);
-                    background: var(--surface-container-highest); color: #fff;
-                    padding: 8px 12px; border-radius: 4px; font-size: 0.6875rem;
-                    width: 200px; white-space: normal; z-index: 100;
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-                    border: 1px solid var(--outline);
-                }
-
-                hr { border: none; border-bottom: 2px solid rgba(69, 70, 82, 0.15); margin: 20px 0; }
+                /* Workforce summary */
+                .summary-bar { display: flex; gap: 24px; background: var(--surface); padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid var(--accent); }
+                .summary-item { display: flex; flex-direction: column; gap: 3px; }
+                .summary-item .label { font-size: 10px; text-transform: uppercase; color: var(--muted); font-weight: 600; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em; }
+                .summary-item .value { font-size: 16px; font-weight: 700; color: var(--text); }
+                /* Employee presence dots */
+                .presence-dot { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; font-size: 0.5rem; font-weight: 700; line-height: 1; margin-right: 4px; color: #090c12; }
+                .dot-worked { background: var(--green); box-shadow: 0 0 5px var(--green); }
+                .dot-missed { background: var(--red); box-shadow: 0 0 5px var(--red); }
+                .dot-pending { background: var(--dim); box-shadow: 0 0 5px var(--dim); }
+                .dot-multi { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+                /* Toasts */
+                #toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 10000; }
+                .toast { background: rgba(9,12,18,0.95); backdrop-filter: blur(8px); color: var(--text); padding: 12px 20px; border-radius: 8px; border-left: 4px solid var(--accent); box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-size: 13px; min-width: 250px; display: flex; justify-content: space-between; align-items: center; animation: toast-in 0.3s ease-out; }
+                .toast.error { border-left-color: var(--red); }
+                .toast.success { border-left-color: var(--green); }
+                .toast.fade-out { opacity: 0; transform: translateX(100%); transition: opacity 0.3s, transform 0.3s; }
+                /* Info tooltip */
+                .info-tooltip { position: relative; display: inline-block; cursor: help; margin-left: 5px; color: var(--dim); }
+                .info-tooltip:hover::after { content: attr(data-tip); position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%); background: var(--surface2); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 11px; width: 200px; white-space: normal; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); border: 1px solid var(--border2); font-family: 'Space Grotesk', sans-serif; }
+                hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+                h3 { font-family: 'Space Grotesk', sans-serif; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 600; color: var(--text); }
+                @keyframes toast-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+                @keyframes balance-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+                @keyframes spin { to { transform: rotate(360deg); } }
+                .balance-neg-pulse { animation: balance-pulse 1s ease-in-out infinite; }
+                input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
             </style>
         `;
 
         document.body.innerHTML = `
-            <div id="app">
+            <div id="ccm-root">
                 <div id="toast-container"></div>
-                <div class="header">
-                    <h1>Custom Company Manager</h1>
-                    <div style="display:flex; align-items:center; gap:15px;">
-                        <span id="tycoon-display" style="font-weight: bold; color: var(--secondary); font-size: 13px;"></span>
-                        <span id="energy-display" style="font-weight: bold; color: var(--primary);">Energy: --</span>
-                        <span id="wallet-display" style="font-size: 13px; font-weight: bold;"></span>
-                        <button id="btn-sync" class="btn">Full System Sync</button>
+                <header id="ccm-topbar">
+                    <div class="ccm-topbar-left">
+                        <span class="ccm-dot"></span>
+                        <span style="font-size:15px;font-weight:600;letter-spacing:-0.02em;">Custom Company Manager</span>
                     </div>
-                </div>
-                <div class="layout">
-                    <div class="panel">
-                        <h3 style="margin-top:0">Filters</h3>
-                        
-                        <div class="form-group">
-                            <label>Holding</label>
-                            <select id="filter-holding" class="form-control">
+                    <div class="ccm-topbar-right">
+                        <div class="ccm-topbar-item">
+                            <span class="ccm-item-label">Tycoon</span>
+                            <span id="tycoon-display"></span>
+                        </div>
+                        <div class="ccm-bar-sep"></div>
+                        <div class="ccm-topbar-item">
+                            <span class="ccm-item-label">Energy</span>
+                            <span id="energy-display" style="font-size:13px;font-weight:600;color:var(--green);font-family:'JetBrains Mono',monospace;">--</span>
+                        </div>
+                        <div class="ccm-bar-sep"></div>
+                        <span id="wallet-display"></span>
+                        <button id="btn-sync" class="btn">
+                            <svg class="btn-sync-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+                                <path d="M21 3v5h-5"/>
+                            </svg>
+                            <span class="btn-sync-text">Full System Sync</span>
+                        </button>
+                    </div>
+                </header>
+                <div id="ccm-body">
+                    <aside id="ccm-sidebar">
+                        <div class="ccm-section-title">Filters</div>
+                        <div class="ccm-field">
+                            <div class="ccm-label">Holding</div>
+                            <select id="filter-holding" class="ccm-select">
                                 <option value="all">All Holdings (incl. Unassigned)</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>Industry</label>
-                            <select id="filter-industry" class="form-control">
+                        <div class="ccm-field">
+                            <div class="ccm-label">Industry</div>
+                            <select id="filter-industry" class="ccm-select">
                                 <option value="all">All Industries</option>
                                 <option value="food">Food</option>
                                 <option value="food_raw">Food Raw</option>
@@ -1346,9 +1313,9 @@
                                 <option value="aircraft_raw">Aircraft Raw</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>Quality</label>
-                            <select id="filter-quality" class="form-control">
+                        <div class="ccm-field">
+                            <div class="ccm-label">Quality</div>
+                            <select id="filter-quality" class="ccm-select">
                                 <option value="all">All Qualities</option>
                                 <option value="1">Q1</option>
                                 <option value="2">Q2</option>
@@ -1359,67 +1326,66 @@
                                 <option value="7">Q7</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label style="display:flex; justify-content:space-between; align-items:center;">
+                        <div class="ccm-field">
+                            <div class="ccm-label" style="display:flex;justify-content:space-between;">
                                 <span>Productivity ≥</span>
-                                <div style="display:flex; align-items:center; gap:2px;">
-                                    <input type="number" id="filter-prod-num" value="0" min="0" max="300" 
-                                           style="width:60px; background:transparent; border:none; border-bottom:1px solid var(--outline); color:var(--primary); font-weight:bold; text-align:right; font-size:0.875rem; padding:0;" />
-                                    <span style="color:var(--on-surface-variant); font-size:0.75rem;">%</span>
-                                </div>
-                            </label>
-                            <input type="range" id="filter-prod" min="0" max="300" step="1" value="0" style="width:100%; accent-color:var(--primary); background:var(--surface-container-highest);">
+                                <span id="prod-label" style="color:var(--accent);font-weight:500;">0%</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <input type="range" id="filter-prod" min="0" max="300" step="1" value="0" style="flex:1;accent-color:var(--accent);cursor:pointer;">
+                                <input type="number" id="filter-prod-num" value="0" min="0" max="300" class="ccm-input" style="width:52px;padding:4px 6px;font-size:11px;font-family:'JetBrains Mono',monospace;" />
+                            </div>
                         </div>
 
-                        <hr style="border-color: var(--border); margin: 20px 0;" />
+                        <div class="ccm-divider"></div>
 
-                        <h3 style="margin-top:0">Mass Actions</h3>
+                        <div class="ccm-section-title">Mass Actions</div>
                         <p class="summary" id="action-summary">Select a specific holding to enable Work as Manager.</p>
-                        
-                        <div id="wam-selector-container" style="display:none; margin-bottom:15px;">
-                            <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                                <span style="font-size:0.75rem; color:var(--on-surface-variant);">Companies to WAM:</span>
-                                <strong id="wam-selected-count" style="color:var(--primary);">0</strong>
-                            </label>
-                            <input type="range" id="wam-slider" min="0" max="0" value="0" style="width:100%; accent-color:var(--primary); background:var(--surface-container-highest);">
-                            <button id="btn-select-by-energy" class="btn btn-secondary" style="width:100%; margin-top:10px; padding: 5px; font-size: 0.6875rem;">Select by Energy</button>
-                        </div>
-
-                        <div style="display:flex; align-items:center; gap:15px; margin-bottom:10px;">
-                            <button id="btn-wam" class="btn" disabled>Work as Manager in Holding</button>
-                            <div style="display:flex; flex-direction:column; gap:5px;">
-                                <label style="display:flex; align-items:center; gap:5px; font-size:0.6875rem; color:var(--on-surface-variant); cursor:pointer;">
-                                    <input type="checkbox" id="chk-travel-holding" checked> Auto-Travel to Holding
-                                </label>
-                                <label style="display:flex; align-items:center; gap:5px; font-size:0.6875rem; color:var(--on-surface-variant); cursor:pointer;">
-                                    <input type="checkbox" id="chk-travel-home" checked> Return Home Afterwards
-                                </label>
+                        <div id="wam-selector-container" style="display:none;margin-bottom:12px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                                <span class="ccm-label" style="margin-bottom:0;">Companies to WAM:</span>
+                                <strong id="wam-selected-count" style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:12px;">0</strong>
                             </div>
+                            <input type="range" id="wam-slider" min="0" max="0" value="0" style="width:100%;accent-color:var(--accent);cursor:pointer;margin-bottom:8px;">
+                            <button id="btn-select-by-energy" class="btn btn-secondary" style="width:100%;justify-content:center;font-size:11px;padding:6px 10px;">Select by Energy</button>
                         </div>
-                        
-                        <hr style="border-color: var(--border); margin: 20px 0;" />
-                        <div style="margin-bottom:8px; font-size:0.6875rem; text-transform:uppercase; letter-spacing:0.5px; color:var(--on-surface-variant); font-family:'Space Grotesk',sans-serif; font-weight:600;">Production Estimate</div>
-                        <div id="resource-estimate" class="summary" style="margin-bottom:0;">—</div>
+                        <button id="btn-wam" class="btn" disabled style="width:100%;justify-content:center;margin-bottom:10px;">Work as Manager in Holding</button>
+                        <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);margin-bottom:6px;cursor:pointer;">
+                            <input type="checkbox" id="chk-travel-holding" checked style="accent-color:var(--accent);"> Auto-Travel to Holding
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);cursor:pointer;">
+                            <input type="checkbox" id="chk-travel-home" checked style="accent-color:var(--accent);"> Return Home Afterwards
+                        </label>
 
-                        <hr style="border-color: var(--border); margin: 20px 0;" />
-                        <h3 style="margin-top:0">Employee Assignment</h3>
+                        <div class="ccm-divider"></div>
+
+                        <div class="ccm-section-title">Production Estimate</div>
+                        <div id="resource-estimate" style="font-size:11px;color:var(--muted);">—</div>
+
+                        <div class="ccm-divider"></div>
+
+                        <div class="ccm-section-title">Employee Assignment</div>
                         <p class="summary" id="assign-summary">Filter above to find target companies.</p>
-                        <div class="form-group">
-                            <label>Employees to Assign</label>
-                            <input type="number" id="emp-amount" class="form-control" value="0" min="0" />
-                            <div style="display:flex; gap:10px; margin-top:8px;">
-                                <button id="btn-use-max-emp" class="btn" style="flex:1;" disabled>Use Max</button>
-                                <button id="btn-assign" class="btn" style="flex:2;" disabled>Assign & Work</button>
+                        <div class="ccm-field">
+                            <div class="ccm-label">Employees to Assign</div>
+                            <input type="number" id="emp-amount" class="ccm-input" value="0" min="0" style="margin-bottom:8px;" />
+                            <div style="display:flex;gap:6px;">
+                                <button id="btn-use-max-emp" class="btn btn-secondary" disabled style="flex:1;justify-content:center;">Use Max</button>
+                                <button id="btn-assign" class="btn" disabled style="flex:1;justify-content:center;">Assign & Work</button>
                             </div>
                         </div>
-                        
-                        <hr style="border-color: var(--border); margin: 20px 0;" />
-                        <h3 style="margin-top:0">Mass Company Upgrade <span class="info-tooltip" data-tip="Requires a specific Holding, Non-Raw Industry, and Quality level to be selected.">ⓘ</span></h3>
+
+                        <div class="ccm-divider"></div>
+
+                        <div class="ccm-section-title">
+                            Mass Company Upgrade
+                            <span class="info-tooltip" data-tip="Requires a specific Holding, Non-Raw Industry, and Quality level to be selected.">ⓘ</span>
+                        </div>
                         <p class="summary" id="upgrade-summary">Filter by industry to enable.</p>
-                        <div style="display:flex; gap:10px; margin-bottom:10px;">
+                        <div style="display:flex;gap:8px;margin-bottom:10px;">
                             <div style="flex:1;">
-                                <label style="font-size:0.6875rem; color:var(--on-surface-variant);">Target Q</label>
-                                <select id="upgrade-target-q" class="form-control">
+                                <div class="ccm-label">Target Q</div>
+                                <select id="upgrade-target-q" class="ccm-select">
                                     <option value="2">Q2</option>
                                     <option value="3">Q3</option>
                                     <option value="4">Q4</option>
@@ -1429,40 +1395,42 @@
                                 </select>
                             </div>
                             <div style="flex:1;">
-                                <label style="font-size:0.6875rem; color:var(--on-surface-variant);">Amount</label>
-                                <input type="number" id="upgrade-amount" class="form-control" value="1" min="1" />
+                                <div class="ccm-label">Amount</div>
+                                <input type="number" id="upgrade-amount" class="ccm-input" value="1" min="1" />
                             </div>
                         </div>
-                        <button id="btn-mass-upgrade" class="btn" style="width:100%;" disabled>Upgrade Selected</button>
+                        <button id="btn-mass-upgrade" class="btn" disabled style="width:100%;justify-content:center;">Upgrade Selected</button>
 
-                        <hr />
-                        <h3 style="margin-top:0">Personal Work</h3>
-                        <p class="summary" id="personal-work-summary">Checking status...</p>
-                        <div style="display:flex; gap:10px;">
-                            <button id="btn-work-emp" class="btn" disabled style="flex:1; padding: 10px 5px; font-size: 0.75rem;">Work</button>
-                            <button id="btn-work-ot" class="btn btn-secondary" disabled style="flex:1; padding: 10px 5px; font-size: 0.75rem;">Overtime</button>
+                        <div class="ccm-divider"></div>
+
+                        <div class="ccm-section-title">Personal Work</div>
+                        <div id="personal-work-summary" class="summary" style="margin-bottom:10px;">Checking status...</div>
+                        <div style="display:flex;gap:6px;">
+                            <button id="btn-work-emp" class="btn btn-secondary" disabled style="flex:1;justify-content:center;font-size:11px;">Work</button>
+                            <button id="btn-work-ot" class="btn btn-ghost" disabled style="flex:1;justify-content:center;font-size:11px;">Overtime</button>
                         </div>
-                    </div>
-                    
-                    <div class="panel" style="padding-bottom: 0;">
+                    </aside>
+                    <main id="ccm-main">
                         <div class="tabs">
                             <div class="tab active" data-tab="companies">Companies</div>
                             <div class="tab" data-tab="employees">Employees</div>
                             <div class="tab" data-tab="settings">Settings</div>
+                            <div style="margin-left:auto;display:flex;align-items:center;padding-bottom:8px;">
+                                <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--muted);"><span id="count-display">0</span> companies shown</span>
+                            </div>
                         </div>
-
-                        <div id="tab-companies" style="display:flex; flex-direction:column; flex:1; min-height:0;">
-                            <h3 style="margin-top:0">Holdings Summary (<span id="count-display">0</span> Companies)</h3>
+                        <div id="tab-companies" style="display:flex;flex-direction:column;flex:1;min-height:0;">
                             <div class="header-row" id="company-header-row">
-                                <div class="col-name" data-sort="industry" style="cursor:pointer;user-select:none;">Industry</div>
-                                <div class="col-emp" data-sort="employees" style="cursor:pointer;user-select:none;">Employees</div>
-                                <div class="col-hold" data-sort="holding" style="cursor:pointer;user-select:none;">Holding</div>
-                                <div class="col-stat" data-sort="status" style="cursor:pointer;user-select:none;">Status</div>
+                                <div class="col-industry">Industry</div>
+                                <div class="col-count" data-sort="count" style="cursor:pointer;text-align:center;">Count</div>
+                                <div class="col-prod" data-sort="prod" style="cursor:pointer;text-align:right;padding-right:14px;">Productivity</div>
+                                <div class="col-emp" data-sort="employees" style="cursor:pointer;text-align:center;">Employees</div>
+                                <div class="col-hold" data-sort="holding" style="cursor:pointer;">Holding</div>
+                                <div class="col-stat" style="text-align:right;">Status</div>
                             </div>
                             <div id="list-container"></div>
                         </div>
-
-                        <div id="tab-employees" style="display:none; flex-direction:column; flex:1; min-height:0;">
+                        <div id="tab-employees" style="display:none;flex-direction:column;flex:1;min-height:0;">
                             <div class="summary-bar" id="workforce-summary">
                                 <div class="summary-item">
                                     <span class="label">Total Workforce</span>
@@ -1477,7 +1445,7 @@
                                     <span class="value" id="wf-avg-salary">--</span>
                                 </div>
                             </div>
-                            <h3 style="margin-top:0">Employees (<span id="emp-count-display">0</span>)</h3>
+                            <h3>Employees (<span id="emp-count-display">0</span>)</h3>
                             <div class="header-row">
                                 <div class="col-name">Employee</div>
                                 <div class="col-q" style="width:20%">Presence (7d)</div>
@@ -1486,12 +1454,11 @@
                             </div>
                             <div id="employee-list-container"></div>
                         </div>
-
-                        <div id="tab-settings" style="display:none; flex-direction:column; flex:1; min-height:0;">
-                            <h3 style="margin-top:0">System Synchronization</h3>
+                        <div id="tab-settings" style="display:none;flex-direction:column;flex:1;min-height:0;overflow-y:auto;">
+                            <h3>System Synchronization</h3>
                             <div class="settings-grid" id="settings-container"></div>
                         </div>
-                    </div>
+                    </main>
                 </div>
             </div>
         `;
@@ -1501,7 +1468,17 @@
         AppState.employeeList = new VirtualList('employee-list-container', 48, renderEmployeeRow);
 
         // 3. Bind Event Listeners
-        document.getElementById('btn-sync').addEventListener('click', performGoldenLoad);
+        document.getElementById('btn-sync').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-sync');
+            const textEl = btn.querySelector('.btn-sync-text');
+            btn.classList.add('syncing');
+            btn.disabled = true;
+            if (textEl) textEl.textContent = 'Syncing…';
+            await performGoldenLoad();
+            btn.classList.remove('syncing');
+            btn.disabled = false;
+            if (textEl) textEl.textContent = 'Full System Sync';
+        });
         document.getElementById('filter-holding').addEventListener('change', e => { AppState.filters.holding = e.target.value; AppState.wamSelections = {}; applyFilters(); });
         document.getElementById('filter-industry').addEventListener('change', e => { AppState.filters.industry = e.target.value; applyFilters(); });
         document.getElementById('filter-quality').addEventListener('change', e => { AppState.filters.quality = e.target.value; applyFilters(); });
@@ -1514,6 +1491,8 @@
             AppState.filters.productivity = val;
             prodSlider.value = val;
             prodNum.value = val;
+            const prodLabelEl = document.getElementById('prod-label');
+            if (prodLabelEl) prodLabelEl.textContent = val + '%';
             applyFilters();
         };
 
@@ -1762,7 +1741,7 @@
 
         // Update Energy UI
         const energyDisp = document.getElementById('energy-display');
-        if (energyDisp) energyDisp.textContent = `Energy: ${AppState.energyData.energy || '--'}`;
+        if (energyDisp) energyDisp.textContent = (AppState.energyData.energy ?? '--').toLocaleString();
 
         applyFilters();
         updateWorkforceSummary();
@@ -1877,6 +1856,8 @@
         if (col) {
             const sortFns = {
                 industry: (a, b) => a.industry.localeCompare(b.industry) || a.quality - b.quality,
+                count: (a, b) => b.count - a.count,
+                prod: (a, b) => b.productivity - a.productivity,
                 employees: (a, b) => b.empSlots - a.empSlots,
                 holding: (a, b) => a.holding_name.localeCompare(b.holding_name),
                 status: (a, b) => b.pending - a.pending,
@@ -1906,11 +1887,11 @@
     }
 
     function updateSortIndicators() {
-        const labels = { industry: 'Industry', employees: 'Employees', holding: 'Holding', status: 'Status' };
+        const labels = { count: 'Count', prod: 'Productivity', employees: 'Employees', holding: 'Holding' };
         document.querySelectorAll('#company-header-row [data-sort]').forEach(el => {
             const col = el.dataset.sort;
             const isActive = AppState.tableSort.col === col;
-            el.style.color = isActive ? 'var(--primary)' : '';
+            el.style.color = isActive ? 'var(--accent)' : '';
             el.textContent = labels[col] + (isActive ? (AppState.tableSort.dir === 1 ? ' ▲' : ' ▼') : '');
         });
     }
@@ -2045,52 +2026,83 @@
     }
 
     function renderCompanyRow(comp) {
-        let statusStr = '';
         const isWammable = !NON_WAMMABLE_INDUSTRIES.has(comp.industry);
+        const isRaw = comp.industry.endsWith('_raw');
+        const baseInd = comp.industry.replace('_raw', '');
+        const badgeColors = {
+            food: isRaw ? ['rgba(120,200,80,0.12)', '#90d060', 'rgba(120,200,80,0.25)'] : ['rgba(80,180,100,0.12)', '#60c080', 'rgba(80,180,100,0.25)'],
+            weapon: isRaw ? ['rgba(255,120,80,0.12)', '#ff9060', 'rgba(255,120,80,0.25)'] : ['rgba(220,80,80,0.12)', '#e06060', 'rgba(220,80,80,0.25)'],
+            house: ['rgba(100,150,255,0.12)', '#80a0ff', 'rgba(100,150,255,0.25)'],
+            aircraft: ['rgba(180,120,255,0.12)', '#c090ff', 'rgba(180,120,255,0.25)'],
+        };
+        const [bbg, bc, bbd] = badgeColors[baseInd] || ['rgba(100,100,100,0.12)', '#888', 'rgba(100,100,100,0.25)'];
+        const badgeLabel = isRaw ? `${formatIndustryName(baseInd)} Raw` : formatIndustryName(baseInd);
 
-        if (comp.worked > 0) statusStr += `<span class="status-chip chip-success" style="margin-right:2px">${comp.worked} Worked</span>`;
+        const prod = parseFloat(comp.productivity);
+        const prodPct = Math.min(100, (prod / 200) * 100);
+        const prodBarColor = prod >= 180 ? 'var(--green)' : prod >= 160 ? 'var(--accent)' : 'var(--red)';
+        const prodTextColor = prod >= 180 ? 'var(--green)' : 'var(--dim)';
 
+        const empSlots = comp.empSlots || 0;
+        const empWorked = comp.empWorked || 0;
+        const empSim = comp.empSim || 0;
+        const empTotal = empWorked + empSim;
+        const empPct = empSlots > 0 ? Math.min(100, (empTotal / empSlots) * 100) : 0;
+        const empDisplay = empSlots > 0
+            ? `${empWorked}${empSim > 0 ? `<span style="color:var(--accent)">(+${empSim})</span>` : ''}/${empSlots}`
+            : '<span style="color:var(--muted)">N/A</span>';
+
+        let statusStr = '';
+        if (comp.worked > 0) statusStr += `<span class="status-chip chip-success">${comp.worked} Worked</span> `;
         if (comp.pending > 0) {
             if (isWammable && AppState.filters.holding !== 'all' && AppState.filters.holding !== 'unassigned') {
-                statusStr += `
-                    <div style="display:inline-flex; align-items:center; gap:5px; margin-left:5px;">
-                        <input type="number" class="wam-input" data-key="${comp.key}" value="${comp.wamCount || 0}" min="0" max="${comp.pending}" 
-                               style="width:40px; background:var(--surface-container-highest); border:none; border-bottom:1px solid var(--primary); color:#fff; text-align:center; font-size:0.75rem; padding:2px 0; border-radius:2px;">
-                        <span style="font-size:0.65rem; color:var(--on-surface-variant)">/ ${comp.pending}</span>
-                    </div>`;
+                statusStr += `<span style="display:inline-flex;align-items:center;gap:4px;">` +
+                    `<input type="number" class="wam-input" data-key="${comp.key}" value="${comp.wamCount || 0}" min="0" max="${comp.pending}"` +
+                    ` style="width:36px;background:var(--bg2);border:1px solid var(--accent);color:var(--text);text-align:center;font-size:11px;padding:2px 4px;border-radius:4px;font-family:'JetBrains Mono',monospace;">` +
+                    `<span style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;">/${comp.pending}</span></span>`;
             } else if (isWammable) {
                 statusStr += `<span class="status-chip chip-danger">${comp.pending} Pending</span>`;
             } else {
-                statusStr += `<span class="status-chip" style="background:var(--surface-variant); color:var(--on-surface-variant)">Not WAM-able</span>`;
+                statusStr += `<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">Not WAM-able</span>`;
             }
+        } else if (comp.worked === 0) {
+            statusStr = `<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">Not WAM-able</span>`;
         }
 
-        let empStr = '';
-        if (comp.empSlots > 0) {
-            const hasSim = comp.empSim > 0;
-            const simText = hasSim ? `(${comp.empSim})` : '';
-            const isFull = (comp.empWorked + (comp.empSim || 0)) === comp.empSlots;
-            const chipClass = isFull ? 'chip-success' : 'chip-danger';
-            const extraStyle = (!isFull && !hasSim) ? 'background:var(--warning); color:#fff; border-color:var(--warning);' : '';
-
-            empStr = `<span class="status-chip ${chipClass}" style="padding: 2px 4px; font-size: 0.65rem; ${extraStyle}">${comp.empWorked}${simText}/${comp.empSlots} Emp</span>`;
-        } else {
-            empStr = `<span style="color:var(--on-surface-variant); font-size:0.65rem;">N/A</span>`;
-        }
-
+        const mono = `font-family:'JetBrains Mono',monospace;`;
         return `<tr>
-            <td class="col-name">
-                <div style="display:flex; flex-direction:column; justify-content:center;">
-                    <div style="display:flex; align-items:center; gap:5px;">
-                        <strong style="color:var(--text-main)">Q${comp.quality} ${formatIndustryName(comp.industry)}</strong>
-                        <span style="color:var(--on-surface-variant)">x${comp.count}</span>
+            <td class="col-industry" style="height:52px;">
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="background:${bbg};color:${bc};border:1px solid ${bbd};border-radius:100px;padding:1px 7px;font-size:10px;${mono}letter-spacing:0.06em;font-weight:500;flex-shrink:0;">${badgeLabel}</span>
+                        <span style="font-weight:500;font-size:13px;letter-spacing:-0.01em;">Q${comp.quality} ${formatIndustryName(comp.industry)}</span>
                     </div>
-                    <span style="font-size:0.625rem; color:var(--secondary); font-weight:500;">Productivity: ${parseFloat(comp.productivity).toFixed(2)}%</span>
+                    <span style="font-size:10px;color:var(--muted);${mono}">Productivity: ${prod.toFixed(2)}%</span>
                 </div>
             </td>
-            <td class="col-emp">${empStr}</td>
-            <td class="col-hold">${comp.holding_name}</td>
-            <td class="col-stat">${statusStr}</td>
+            <td class="col-count" style="height:52px;">
+                <span style="${mono}font-size:13px;font-weight:500;color:var(--dim);">×${comp.count}</span>
+            </td>
+            <td class="col-prod" style="height:52px;">
+                <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+                    <div style="width:60px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;">
+                        <div style="width:${prodPct}%;height:100%;background:${prodBarColor};border-radius:2px;"></div>
+                    </div>
+                    <span style="${mono}font-size:12px;color:${prodTextColor};width:52px;text-align:right;">${prod.toFixed(1)}%</span>
+                </div>
+            </td>
+            <td class="col-emp" style="height:52px;">
+                <div style="display:flex;align-items:center;gap:5px;justify-content:center;">
+                    <span style="${mono}font-size:12px;color:var(--dim);">${empDisplay}</span>
+                    ${empSlots > 0 ? `<div style="width:32px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;"><div style="width:${empPct}%;height:100%;background:var(--accent);border-radius:2px;"></div></div>` : ''}
+                </div>
+            </td>
+            <td class="col-hold" style="height:52px;">
+                <span style="font-size:12px;color:var(--dim);">${comp.holding_name}</span>
+            </td>
+            <td class="col-stat" style="height:52px;text-align:right;">
+                ${statusStr}
+            </td>
         </tr>`;
     }
 
@@ -2333,18 +2345,28 @@
         const now = Math.floor(Date.now() / 1000);
         const nextOt = AppState.pageDetails.next_overtime_work || 0;
         const otCost = now < nextOt ? 100 : 10;
-        const otText = now < nextOt
-            ? `<span class="status-chip chip-danger">Cooldown (100 energy)</span>`
-            : '<span class="status-chip chip-success">Available (10 energy)</span>';
+        const onCooldown = now < nextOt;
+        const otBadge = onCooldown
+            ? `<span style="background:rgba(224,87,87,0.15);color:var(--red);border:1px solid rgba(224,87,87,0.25);border-radius:100px;padding:2px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;">Cooldown · 100 energy</span>`
+            : `<span style="background:rgba(76,175,125,0.1);color:var(--green);border:1px solid rgba(76,175,125,0.25);border-radius:100px;padding:2px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;">Available · 10 energy</span>`;
 
         const hasEmpEnergy = AppState.energyData.energy >= 10;
         const hasOtEnergy = AppState.energyData.energy >= otCost;
         const salaryText = `${AppState.pageDetails.employee.salary} ${AppState.pageDetails.employee.currency}`;
+        const mono = `font-family:'JetBrains Mono',monospace;`;
 
-        pwSummary.innerHTML = `Salary: <strong style="color:var(--text-main)">${salaryText}</strong><br>Overtime: ${otText}`;
+        pwSummary.innerHTML =
+            `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">` +
+            `<span style="color:var(--muted);font-size:11px;">Salary</span>` +
+            `<span style="${mono}font-size:11px;font-weight:500;color:var(--accent);">${salaryText}</span>` +
+            `</div>` +
+            `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">` +
+            `<span style="font-size:11px;color:var(--muted);">Overtime</span>${otBadge}` +
+            `</div>`;
         btnEmp.disabled = alreadyWorked || !hasEmpEnergy || !AppState.csrfToken;
-        btnEmp.textContent = alreadyWorked ? 'Already Worked' : 'Work';
+        btnEmp.textContent = alreadyWorked ? '✓ Worked' : 'Work';
         btnOt.disabled = !alreadyWorked || !hasOtEnergy || !AppState.csrfToken;
+        btnOt.style.opacity = onCooldown ? '0.4' : '';
         btnOt.title = !hasOtEnergy ? `Insufficient energy (need ${otCost})` : '';
     }
 
@@ -2354,21 +2376,26 @@
         const total = AppState.pageDetails.storage_total || 0;
         if (total === 0) return '';
 
-        const hasDelta = storageDelta !== 0;
         const projected = Math.round(used + storageDelta);
-        const displayUsed = hasDelta ? projected : used;
-        const pct = Math.round(displayUsed / total * 100);
+        const displayUsed = storageDelta !== 0 ? projected : used;
+        const pct = Math.round(Math.min(100, displayUsed / total * 100));
         const isOver = displayUsed > total;
-        const isWarn = !isOver && pct >= 90;
-        const color = (isOver || isWarn) ? 'var(--danger-text)' : 'var(--on-surface-variant)';
-
-        const deltaStr = hasDelta
-            ? ` <span style="font-size:0.6rem;color:var(--on-surface-variant)">(${used.toLocaleString()} + ${Math.round(storageDelta).toLocaleString()})</span>`
+        const barColor = isOver ? 'var(--red)' : 'var(--accent)';
+        const pulse = isOver ? ' class="balance-neg-pulse"' : '';
+        const deltaNote = storageDelta !== 0
+            ? `<span style="font-size:10px;color:var(--muted);"> (${used.toLocaleString()}${storageDelta > 0 ? '+' : ''}${Math.round(storageDelta).toLocaleString()})</span>`
             : '';
-        const overTag = isOver ? ' ⚠ over capacity' : '';
-        const pulseStyle = isOver ? ' class="balance-neg-pulse"' : '';
 
-        return `<span${pulseStyle} style="font-size:0.65rem;color:${color}">Storage: ${displayUsed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)${overTag}</span>${deltaStr}<br>`;
+        return `<div style="background:var(--bg2);border-radius:6px;padding:8px 10px;border:1px solid var(--border);margin-top:8px;">` +
+            `<div style="display:flex;justify-content:space-between;margin-bottom:5px;">` +
+            `<span style="font-size:11px;color:var(--muted);">Storage${isOver ? ' ⚠' : ''}</span>` +
+            `<span${pulse} style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);">${displayUsed.toLocaleString()} / ${total.toLocaleString()}${deltaNote}</span>` +
+            `</div>` +
+            `<div style="height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;">` +
+            `<div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;"></div>` +
+            `</div>` +
+            `<div style="text-align:right;font-size:10px;color:var(--muted);margin-top:3px;">${pct}%</div>` +
+            `</div>`;
     }
 
     function updateResourceEstimate() {
@@ -2381,9 +2408,7 @@
         const { breakdown, rawProjected } = computeProductionEstimate(combined);
         const { html: estimatesHtml } = renderEstimateHtml(breakdown, rawProjected, getStockMap());
 
-        const noProdHtml = combined.length === 0
-            ? '<span style="font-size:0.65rem;color:var(--on-surface-variant)">No production planned.</span><br>'
-            : '';
+        const noProdHtml = '';
 
         // Raw units occupy 100 storage each; finished goods are 1:1.
         // breakdown keys ending in '_raw' are raw producers (cons=0); others are finished goods.
@@ -2601,7 +2626,7 @@
                 await setDbValue('energyData', energy);
                 AppState.energyData = energy;
                 const energyDisp = document.getElementById('energy-display');
-                if (energyDisp) energyDisp.textContent = `Energy: ${energy.energy || '--'}`;
+                if (energyDisp) energyDisp.textContent = (energy.energy ?? '--').toLocaleString();
 
                 updateSyncMeta('energy');
                 if (!silent) showToast('Energy synced.', 'success');
@@ -3348,18 +3373,19 @@
             overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:100000;display:flex;align-items:center;justify-content:center;';
 
             const modal = document.createElement('div');
-            modal.style.cssText = 'background:#1a1d20;border:1px solid rgba(255,255,255,0.12);min-width:320px;max-width:520px;width:90vw;font-family:Inter,sans-serif;color:#e8eaed;';
+            modal.style.cssText = 'background:#0f1420;border:1px solid rgba(255,255,255,0.12);border-radius:8px;min-width:340px;max-width:540px;width:90vw;font-family:"Space Grotesk",sans-serif;color:#e8eaf0;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.6);';
 
-            const confirmColor = danger ? '#c0392b' : '#fabd00';
-            const confirmTextColor = danger ? '#fff' : '#121416';
+            const confirmBg = danger ? '#e05757' : '#ff9800';
+            const confirmText = danger ? '#fff' : '#090c12';
             modal.innerHTML = `
-                <div style="background:#242729;padding:13px 18px;border-bottom:1px solid rgba(255,255,255,0.08);">
-                    <span style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:0.8125rem;color:#fabd00;text-transform:uppercase;letter-spacing:0.5px;">${title}</span>
+                <div style="background:#141926;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;gap:8px;">
+                    <span style="width:6px;height:6px;border-radius:50%;background:${danger ? '#e05757' : '#ff9800'};flex-shrink:0;"></span>
+                    <span style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;letter-spacing:-0.01em;color:#e8eaf0;">${title}</span>
                 </div>
-                <div style="padding:16px 18px;font-size:0.8rem;line-height:1.6;">${bodyHtml}</div>
-                <div style="padding:10px 18px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;">
-                    <button class="ccm-cancel" style="padding:6px 16px;background:transparent;border:1px solid rgba(255,255,255,0.18);color:#aaa;font-size:0.8rem;cursor:pointer;font-family:Inter,sans-serif;">Cancel</button>
-                    <button class="ccm-confirm" style="padding:6px 16px;background:${confirmColor};border:none;color:${confirmTextColor};font-size:0.8rem;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;">${confirmLabel}</button>
+                <div style="padding:18px 20px;font-size:12px;line-height:1.7;color:#8b93aa;font-family:'JetBrains Mono',monospace;">${bodyHtml}</div>
+                <div style="padding:12px 20px;border-top:1px solid rgba(255,255,255,0.07);display:flex;gap:8px;justify-content:flex-end;">
+                    <button class="ccm-cancel" style="padding:7px 16px;background:#202840;border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#8b93aa;font-size:12px;font-weight:600;cursor:pointer;font-family:'Space Grotesk',sans-serif;">Cancel</button>
+                    <button class="ccm-confirm" style="padding:7px 16px;background:${confirmBg};border:none;border-radius:7px;color:${confirmText};font-size:12px;font-weight:700;cursor:pointer;font-family:'Space Grotesk',sans-serif;">${confirmLabel}</button>
                 </div>
             `;
 
