@@ -483,39 +483,16 @@
 
             // Production Recap (Current Active Assignments)
             const recapDiv = $j('#cm-production-recap');
-            let units = {};
 
-            // Use Cached Companies
-            // Filter logic matches the user requirement: "Calculate for all assigned employees"
-            // But we can respect the filter if we wanted to only show stats for what's filtered?
-            // The previous code had the filter check commented out with "Filter check REMOVED".
-            // So we iterate ALL cached companies.
+            const { breakdown } = computeProductionEstimate(cachedCompanies, item => {
+                const activeBtn = item.element.find('.employees_selector a.active, .employees_selector a.employee_works_active').last();
+                if (activeBtn.length > 0) return parseInt(activeBtn.attr('employee')) || 0;
+                return 0;
+            });
 
-            for (const item of cachedCompanies) {
-                const { element, info, multiplier } = item;
-
-                // Check for current assignment (Dynamic)
-                // We must check the DOM for the 'active' class
-                const activeBtn = element.find('.employees_selector a.active, .employees_selector a.employee_works_active').last();
-
-                if (activeBtn.length > 0) {
-                    const assigned = parseInt(activeBtn.attr('employee')) || 0;
-                    if (assigned > 0) {
-                        const produced = assigned * (info.baseProduction || 0) * multiplier;
-
-                        const unitKey = `${info.industry.replace('_raw', ' Raw')} ${info.quality.toUpperCase()}`;
-                        if (!units[unitKey]) units[unitKey] = 0;
-                        units[unitKey] += produced;
-                    }
-                }
-            }
-
-            if (Object.keys(units).length > 0) {
-                const parts = [];
-                for (const [u, val] of Object.entries(units)) {
-                    parts.push(`${val.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${u}`);
-                }
-                recapDiv.text(`Production: ${parts.join(', ')}`);
+            const recapHtml = renderEstimateHtml(breakdown);
+            if (recapHtml) {
+                recapDiv.text(recapHtml);
                 recapDiv.show();
             } else {
                 recapDiv.hide();
@@ -895,6 +872,38 @@
                 el.text('-');
             }
         });
+    }
+
+    // Returns { breakdown, rawProjected } for a set of companies.
+    // countFn(item) → number of units to count for that company (e.g. assigned employees or 1 for WAM).
+    function computeProductionEstimate(companies, countFn) {
+        const breakdown = {};
+        const rawProjected = {};
+
+        for (const item of companies) {
+            const { info, multiplier } = item;
+            const count = countFn(item);
+            if (count <= 0) continue;
+
+            const produced = count * (info.baseProduction || 0) * multiplier;
+            const unitKey = `${info.industry.replace('_raw', ' Raw')} ${info.quality.toUpperCase()}`;
+
+            if (!breakdown[unitKey]) breakdown[unitKey] = 0;
+            breakdown[unitKey] += produced;
+        }
+
+        return { breakdown, rawProjected };
+    }
+
+    // Returns a formatted production string, or null if nothing to show.
+    // stockMap is reserved for future stock-vs-projection comparisons.
+    function renderEstimateHtml(breakdown, rawProjected, stockMap) {
+        if (Object.keys(breakdown).length === 0) return null;
+
+        const parts = Object.entries(breakdown).map(([unit, val]) =>
+            `${val.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`
+        );
+        return `Production: ${parts.join(', ')}`;
     }
 
     function showToast(message, type = 'info') {

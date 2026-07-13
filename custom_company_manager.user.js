@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.8
+// @version      0.9
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -677,6 +677,7 @@
         filteredArr: [],
         employeesArr: [],
         employeeOverview: {},
+        workforceHistory: {},            // { [citizenId]: { citizenId, name, avatar, hiredOn, days: { [day]: { w, s } } } } — up to 365 days
         holdingsMap: {},
         pageDetails: {},
         energyData: {},
@@ -1242,6 +1243,22 @@
                 .dot-missed { background: var(--red); box-shadow: 0 0 5px var(--red); }
                 .dot-pending { background: var(--dim); box-shadow: 0 0 5px var(--dim); }
                 .dot-multi { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+                /* Workforce history (below employee list) */
+                #workforce-history { flex-shrink: 0; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+                #workforce-history:empty { display: none; }
+                .wf-hist-title { font-size: 11px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); font-weight: 600; }
+                .wf-hist-chart { display: flex; align-items: flex-end; gap: 1px; height: 60px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+                .wf-hist-bar { flex: 0 0 5px; min-height: 1px; background: var(--accent-dim); border-radius: 1px 1px 0 0; transition: background 0.15s; cursor: default; }
+                .wf-hist-bar.has-work { background: var(--accent); }
+                .wf-hist-bar:hover { background: var(--gold); }
+                .emp-row:hover td { background: var(--surface2); }
+                /* Employee detail modal */
+                .emp-detail-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+                .emp-detail-table th { position: sticky; top: 0; background: var(--surface); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 600; text-align: right; padding: 6px 10px; }
+                .emp-detail-table th:first-child { text-align: left; }
+                .emp-detail-table td { padding: 5px 10px; text-align: right; color: var(--text); border-top: 1px solid var(--border); }
+                .emp-detail-table td:first-child { text-align: left; color: var(--dim); }
+                .emp-detail-table tr.no-work td { color: var(--muted); }
                 /* Toasts */
                 #toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 10000; }
                 .toast { background: rgba(9,12,18,0.95); backdrop-filter: blur(8px); color: var(--text); padding: 12px 20px; border-radius: 8px; border-left: 4px solid var(--accent); box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-size: 13px; min-width: 250px; display: flex; justify-content: space-between; align-items: center; animation: toast-in 0.3s ease-out; }
@@ -1453,6 +1470,7 @@
                                 <div class="col-hold" style="width:25%">Total Paid (7d)</div>
                             </div>
                             <div id="employee-list-container"></div>
+                            <div id="workforce-history"></div>
                         </div>
                         <div id="tab-settings" style="display:none;flex-direction:column;flex:1;min-height:0;overflow-y:auto;">
                             <h3>System Synchronization</h3>
@@ -1466,6 +1484,12 @@
         // 2. Initialize Virtual Components
         AppState.virtualList = new VirtualList('list-container', 40, renderCompanyRow);
         AppState.employeeList = new VirtualList('employee-list-container', 48, renderEmployeeRow);
+
+        // Delegated — VirtualList replaces row DOM on every scroll, so listen on the container.
+        document.getElementById('employee-list-container').addEventListener('click', e => {
+            const row = e.target.closest('.emp-row');
+            if (row) showEmployeeDetailModal(row.dataset.cid);
+        });
 
         // 3. Bind Event Listeners
         document.getElementById('btn-sync').addEventListener('click', async () => {
@@ -1643,6 +1667,7 @@
         const inventory = await getDbValue('inventory') || {};
         AppState.employeesArr = await getDbValue('employees') || [];
         AppState.employeeOverview = await getDbValue('employeeOverview') || {};
+        AppState.workforceHistory = await getDbValue('workforceHistory') || {};
         AppState.pageDetails = await getDbValue('pageDetails') || {};
         AppState.energyData = await getDbValue('energyData') || { energy: 0 };
         AppState.csrfToken = await getDbValue('csrfToken') || '';
@@ -1745,6 +1770,7 @@
 
         applyFilters();
         updateWorkforceSummary();
+        renderWorkforceHistory();
     }
 
     function applyFilters() {
@@ -1932,6 +1958,56 @@
         AppState.employeeList.setItems(AppState.employeesArr);
     }
 
+    // Aggregates the stored per-day work/salary records (past year) into KPIs and a daily
+    // activity chart, shown below the employee listing. Includes departed employees' history.
+    function renderWorkforceHistory() {
+        const container = document.getElementById('workforce-history');
+        if (!container) return;
+
+        const perDay = {}; // day -> { works, salary, present }
+        let totalSalary = 0, totalWorks = 0;
+        Object.values(AppState.workforceHistory || {}).forEach(rec => {
+            Object.entries(rec.days || {}).forEach(([day, d]) => {
+                const p = perDay[day] || (perDay[day] = { works: 0, salary: 0, present: 0 });
+                p.works += d.w; p.salary += d.s; if (d.w > 0) p.present++;
+                totalWorks += d.w; totalSalary += d.s;
+            });
+        });
+
+        const dayKeys = Object.keys(perDay).map(Number).sort((a, b) => a - b);
+        if (!dayKeys.length) { container.innerHTML = ''; return; }
+
+        const daysTracked = dayKeys.length;
+        const presentSum = dayKeys.reduce((s, d) => s + perDay[d].present, 0);
+        const avgPresence = presentSum / daysTracked;
+        const currency = AppState.employeeOverview.currency || '';
+
+        // Contiguous span so gaps (unsynced days) render as empty bars.
+        const minDay = dayKeys[0], maxDay = dayKeys[dayKeys.length - 1];
+        const maxWorks = Math.max(...dayKeys.map(d => perDay[d].works), 1);
+        let bars = '';
+        for (let day = minDay; day <= maxDay; day++) {
+            const d = perDay[day];
+            const works = d ? d.works : 0;
+            const salary = d ? d.salary : 0;
+            const present = d ? d.present : 0;
+            const h = Math.max(Math.round((works / maxWorks) * 100), works > 0 ? 4 : 2);
+            const title = `Day ${day} · ${works} works · ${salary.toLocaleString()} ${currency} · ${present} present`;
+            bars += `<div class="wf-hist-bar${works > 0 ? ' has-work' : ''}" style="height:${h}%" title="${title}"></div>`;
+        }
+
+        container.innerHTML = `
+            <div class="wf-hist-title">Workforce History (${daysTracked}d tracked)</div>
+            <div class="summary-bar">
+                <div class="summary-item"><span class="label">Total Salary Paid</span><span class="value">${totalSalary.toLocaleString()} ${currency}</span></div>
+                <div class="summary-item"><span class="label">Total Works</span><span class="value">${totalWorks.toLocaleString()}</span></div>
+                <div class="summary-item"><span class="label">Avg Presence / Day</span><span class="value">${avgPresence.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></div>
+                <div class="summary-item"><span class="label">Days Tracked</span><span class="value">${daysTracked}</span></div>
+            </div>
+            <div class="wf-hist-chart">${bars}</div>
+        `;
+    }
+
     function renderSettingsTab() {
         const container = document.getElementById('settings-container');
         if (!container) return;
@@ -2004,7 +2080,7 @@
 
         const currency = AppState.employeeOverview.currency || '';
 
-        return `<tr>
+        return `<tr class="emp-row" data-cid="${emp.citizenId}" style="cursor:pointer;">
             <td class="col-name" style="height:48px;">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <img src="${emp.avatar}" style="width:28px; height:28px; border-radius:50%; border: 1px solid var(--outline);">
@@ -2532,6 +2608,42 @@
         );
     }
 
+    // Appends per-day work counts and salary paid for each employee, keyed by citizenId.
+    // The game only returns a rolling 7-day window per sync; overlapping days are re-written
+    // with the latest values (today's count grows as employees keep working). Retains 365 days.
+    async function recordWorkforceHistory(employeeData) {
+        const dayNumbers = employeeData.settings?.dayNumbers || [];
+        if (!dayNumbers.length) return;
+        const currentDay = dayNumbers[dayNumbers.length - 1];
+        const cutoff = currentDay - 364; // keep the past year (inclusive)
+
+        const hist = AppState.workforceHistory || {};
+
+        (employeeData.employees || []).forEach(emp => {
+            if (emp.citizenId == null) return;
+            const rec = hist[emp.citizenId] || (hist[emp.citizenId] = { citizenId: emp.citizenId, days: {} });
+            rec.name = emp.name;
+            rec.avatar = emp.avatar;
+            rec.hiredOn = emp.hiredOn;
+            dayNumbers.forEach((day, i) => {
+                const w = emp.workHistory?.[i] ?? 0;
+                const s = emp.salaryHistory?.[i] ?? 0;
+                // -1 is an app convention for "missed"; the API only returns real counts (>= 0).
+                rec.days[day] = { w: Math.max(0, w), s: Math.max(0, s) };
+            });
+        });
+
+        // Prune days older than a year across every record; drop records left empty.
+        Object.keys(hist).forEach(id => {
+            const days = hist[id].days;
+            Object.keys(days).forEach(d => { if (Number(d) < cutoff) delete days[d]; });
+            if (!Object.keys(days).length) delete hist[id];
+        });
+
+        AppState.workforceHistory = hist;
+        await setDbValue('workforceHistory', hist);
+    }
+
     async function syncWorkforce(silent = false, skipReload = false) {
         return syncResource('Workforce',
             () => apiGet('https://www.erepublik.com/en/economy/manage-employees-json', { 'X-Requested-With': 'XMLHttpRequest' }),
@@ -2542,6 +2654,7 @@
 
                 await setDbValue('employees', employeeData.employees);
                 await setDbValue('employeeOverview', employeeData.overview || {});
+                await recordWorkforceHistory(employeeData);
 
                 const currentDay = employeeData.settings ? employeeData.settings.dayNumbers[employeeData.settings.dayNumbers.length - 1] : 0;
                 if (currentDay > AppState.syncMeta.lastDay && AppState.syncMeta.lastDay > 0) {
@@ -3365,6 +3478,74 @@
             toast.classList.add('fade-out');
             setTimeout(() => toast.remove(), 300);
         }, 4000);
+    }
+
+    // Read-only per-employee daily breakdown (works + salary paid) from the stored year of history.
+    function showEmployeeDetailModal(citizenId) {
+        const rec = (AppState.workforceHistory || {})[citizenId];
+        const emp = AppState.employeesArr.find(e => String(e.citizenId) === String(citizenId));
+        const name = rec?.name || emp?.name || 'Employee';
+        const avatar = rec?.avatar || emp?.avatar || '';
+        const hiredOn = rec?.hiredOn ?? emp?.hiredOn;
+        const currency = AppState.employeeOverview.currency || '';
+
+        const days = rec ? Object.keys(rec.days).map(Number).sort((a, b) => b - a) : [];
+        let totalWorks = 0, totalSalary = 0, activeDays = 0;
+        days.forEach(d => {
+            const { w, s } = rec.days[d];
+            totalWorks += w; totalSalary += s; if (w > 0) activeDays++;
+        });
+        const avgWorks = activeDays ? (totalWorks / activeDays) : 0;
+
+        const rows = days.length
+            ? days.map(d => {
+                const { w, s } = rec.days[d];
+                return `<tr class="${w > 0 ? '' : 'no-work'}"><td>${d}</td><td>${w}</td><td>${s.toLocaleString()} ${currency}</td></tr>`;
+            }).join('')
+            : `<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:16px;">No daily history yet — sync workforce across a day change to accumulate.</td></tr>`;
+
+        const kpi = (label, value) =>
+            `<div style="display:flex;flex-direction:column;gap:2px;"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);">${label}</span><span style="font-size:14px;font-weight:700;color:var(--text);">${value}</span></div>`;
+
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:100000;display:flex;align-items:center;justify-content:center;';
+        const modal = document.createElement('div');
+        modal.style.cssText = 'background:#0f1420;border:1px solid rgba(255,255,255,0.12);border-radius:8px;min-width:360px;max-width:520px;width:90vw;max-height:82vh;font-family:"Space Grotesk",sans-serif;color:#e8eaf0;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.6);display:flex;flex-direction:column;';
+        modal.innerHTML = `
+            <div style="background:#141926;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;gap:10px;">
+                ${avatar ? `<img src="${avatar}" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--outline);">` : ''}
+                <div style="display:flex;flex-direction:column;">
+                    <span style="font-weight:600;font-size:13px;color:#e8eaf0;">${name}</span>
+                    ${hiredOn != null ? `<span style="font-size:10px;color:var(--on-surface-variant);font-family:'JetBrains Mono',monospace;">Since day ${hiredOn}</span>` : ''}
+                </div>
+            </div>
+            <div style="padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;gap:24px;flex-wrap:wrap;">
+                ${kpi('Total Works', totalWorks.toLocaleString())}
+                ${kpi('Total Salary', `${totalSalary.toLocaleString()} ${currency}`)}
+                ${kpi('Active Days', activeDays)}
+                ${kpi('Avg Works / Active Day', avgWorks.toLocaleString(undefined, { maximumFractionDigits: 2 }))}
+            </div>
+            <div style="overflow-y:auto;padding:0 20px 16px;">
+                <table class="emp-detail-table">
+                    <thead><tr><th>Day</th><th>Works</th><th>Salary Paid</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+            <div style="padding:12px 20px;border-top:1px solid rgba(255,255,255,0.07);display:flex;justify-content:flex-end;">
+                <button class="ccm-close" style="padding:7px 16px;background:#ff9800;border:none;border-radius:7px;color:#090c12;font-size:12px;font-weight:700;cursor:pointer;font-family:'Space Grotesk',sans-serif;">Close</button>
+            </div>
+        `;
+
+        let keyHandler;
+        const cleanup = () => { document.removeEventListener('keydown', keyHandler); overlay.remove(); };
+        keyHandler = e => { if (e.key === 'Escape') cleanup(); };
+        document.addEventListener('keydown', keyHandler);
+        modal.querySelector('.ccm-close').addEventListener('click', cleanup);
+        overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(); });
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        modal.querySelector('.ccm-close').focus();
     }
 
     function showConfirmModal(title, bodyHtml, confirmLabel = 'Confirm', danger = false) {
