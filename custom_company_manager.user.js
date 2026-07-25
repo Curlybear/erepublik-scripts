@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.9
+// @version      0.10
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -9,6 +9,8 @@
 // @grant        GM_getValue
 // @connect      erepublik.com
 // @connect      productivityapi.curlybear.eu
+// @updateURL    https://curlybear.eu/erep/custom_company_manager.user.js
+// @downloadURL  https://curlybear.eu/erep/custom_company_manager.user.js
 // ==/UserScript==
 
 (function () {
@@ -1739,6 +1741,7 @@
         const wasInactive = previousTycoonUntil < nowSec || previousTycoonUntil === 0;
         const isNowActive = AppState.tycoonUntil > nowSec;
         const isNewActivation = wasInactive && isNowActive && AppState.lastTycoonUntilForBonus !== AppState.tycoonUntil;
+        let tycoonJustActivated = false;
         if (isNewActivation && AppState.employeeWorkPool !== null) {
             AppState.employeeWorkPool += 150;
             await setDbValue('employeeWorkPool', AppState.employeeWorkPool);
@@ -1746,6 +1749,7 @@
             await setDbValue('lastTycoonUntilForBonus', AppState.lastTycoonUntilForBonus);
             console.log(`[WorkPool] +150 Tycoon Pack bonus deposited. Pool: ${AppState.employeeWorkPool}`);
             showToast('Tycoon Pack activated: +150 works added to your pool.', 'success');
+            tycoonJustActivated = true;
         }
 
         // Update Header UI (interval keeps this live; this is the initial render on data load)
@@ -1771,6 +1775,16 @@
         applyFilters();
         updateWorkforceSummary();
         renderWorkforceHistory();
+
+        // effective_bonus is a snapshot taken at infrastructure-sync time and already carries the
+        // pack, so a pack activated since that sync leaves every company reading 20% low until
+        // re-synced. Only relevant on the internal path — the external path adds the pack itself.
+        // Not awaited: the render above must not block on the network. The lastTycoonUntilForBonus
+        // latch set above makes this a no-op on the reload that syncInfrastructure triggers.
+        if (tycoonJustActivated && AppState.syncSettings.infrastructure.auto) {
+            console.log('[Tycoon] New activation — re-syncing infrastructure for updated productivity.');
+            syncInfrastructure(true);
+        }
     }
 
     function applyFilters() {
@@ -1800,6 +1814,12 @@
             const regionId = hId && AppState.holdingsMap[hId] ? AppState.holdingsMap[hId].region_id : null;
             const useExternalProductivity = !AppState.syncSettings.infrastructure.auto;
             const intel = (useExternalProductivity && regionId) ? AppState.productivityCache[regionId] : null;
+
+            // _rawBonus preserves the game's own figure. Captured outside the branches on purpose:
+            // if the external path runs first, capturing inside the else branch would latch onto
+            // the API-derived value instead and the game figure would be lost for the session.
+            if (c._rawBonus === undefined) c._rawBonus = c.effective_bonus;
+
             if (intel && intel.data) {
                 const d = intel.data;
                 let apiVal = 1; // Default
@@ -1814,12 +1834,13 @@
                     apiVal = d[field] || 1;
                 }
 
+                // The API reports regional productivity only — no per-player bonuses — so the
+                // Tycoon Pack has to be added on top here.
                 c.effective_bonus = (apiVal * 100) + tycoonAdd;
             } else {
-                // _rawBonus captures the game's base value once. Without it, repeated applyFilters
-                // calls compound tycoonAdd onto an already-inflated c.effective_bonus.
-                if (c._rawBonus === undefined) c._rawBonus = c.effective_bonus;
-                c.effective_bonus = (c._rawBonus || 100) + tycoonAdd;
+                // The game's effective_bonus already includes the Tycoon Pack as of the last
+                // infrastructure sync. Adding tycoonAdd here double-counts it.
+                c.effective_bonus = c._rawBonus || 100;
             }
 
             let passHolding = true;
@@ -2047,6 +2068,9 @@
                 const id = e.target.dataset.syncId;
                 AppState.syncSettings[id].auto = e.target.checked;
                 await setDbValue('syncSettings', AppState.syncSettings);
+                // This toggle picks the productivity source (internal vs external API), so the
+                // displayed figures are stale the moment it flips. Only this module affects them.
+                if (id === 'infrastructure') applyFilters();
             });
         });
 
