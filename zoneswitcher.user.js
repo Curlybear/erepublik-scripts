@@ -2,7 +2,7 @@
 // @name         Zone Switcher
 // @author       Curlybear
 // @description  Zone/Division Switcher for eRepublik
-// @version      0.21
+// @version      0.22
 // @updateURL    https://curlybear.eu/erep/zoneswitcher.user.js
 // @downloadURL  https://curlybear.eu/erep/zoneswitcher.user.js
 // @match        https://www.erepublik.com/*/military/battlefield/*
@@ -69,6 +69,9 @@
 // 0.21
 // - Stop relying on the game's Array.prototype.unique
 
+// 0.22
+// - Optional auto-refresh of damage, influence and status every 30 seconds (off by default)
+
 (function() {
     'use strict';
 
@@ -98,8 +101,10 @@
                     showInfluence: this.getStoredSetting('showInfluence', true),
                     showMedals: this.getStoredSetting('showMedals', true),
                     showDescriptions: this.getStoredSetting('showDescriptions', true),
+                    autoRefresh: this.getStoredSetting('autoRefresh', false),
                     theme: this.getStoredSetting('theme', 'light')
                 };
+                this.refreshTimer = null;
 
                 this.init();
             }
@@ -110,6 +115,18 @@
                 this.createSettingsButton();
                 this.createSettingsModal();
                 this.applyTheme();
+                this.applyAutoRefresh();
+            }
+
+            // Re-fetches every 30s while enabled; skipped while the tab is in the background
+            applyAutoRefresh() {
+                clearInterval(this.refreshTimer);
+                this.refreshTimer = null;
+                if (this.settings.autoRefresh) {
+                    this.refreshTimer = setInterval(() => {
+                        if (!document.hidden) this.fetchBattleStats();
+                    }, 30 * 1000);
+                }
             }
 
             getStoredSetting(key, defaultValue) {
@@ -224,11 +241,13 @@
                     const damage = this.abbreviateNumber(divData.top_damage[0].damage, 0);
                     damageElement.text(damage);
 
-                    if (divData.top_damage[0].citizen_id == this.citizenId) {
-                        damageElement.addClass("top-damage");
-                    }
+                    // Toggled rather than only added, so a refresh clears it when someone else takes the top spot
+                    const isTopDamage = divData.top_damage[0].citizen_id == this.citizenId;
+                    damageElement.toggleClass("top-damage", isTopDamage);
+                    // hide-me is only ever set on top-damage elements (medal setting), so drop it with the class
+                    if (!isTopDamage) damageElement.removeClass("hide-me");
                 } else {
-                    damageElement.text("Open");
+                    damageElement.text("Open").removeClass("top-damage hide-me");
                 }
             }
 
@@ -310,6 +329,10 @@
                                 Show Hover Descriptions
                             </label>
                             <label>
+                                <input type="checkbox" id="auto-refresh" ${this.settings.autoRefresh ? 'checked' : ''}>
+                                Auto-refresh every 30s
+                            </label>
+                            <label>
                                 Theme:
                                 <select id="theme-select">
                                     <option value="light" ${this.settings.theme === 'light' ? 'selected' : ''}>Light</option>
@@ -333,15 +356,18 @@
                 this.settings.showInfluence = jQuery("#show-influence").is(':checked');
                 this.settings.showMedals = jQuery("#show-medals").is(':checked');
                 this.settings.showDescriptions = jQuery("#show-descriptions").is(':checked');
+                this.settings.autoRefresh = jQuery("#auto-refresh").is(':checked');
                 this.settings.theme = jQuery("#theme-select").val();
 
                 this.setStoredSetting('showInfluence', this.settings.showInfluence);
                 this.setStoredSetting('showMedals', this.settings.showMedals);
                 this.setStoredSetting('showDescriptions', this.settings.showDescriptions);
+                this.setStoredSetting('autoRefresh', this.settings.autoRefresh);
                 this.setStoredSetting('theme', this.settings.theme);
 
                 this.applySettings();
                 this.applyTheme();
+                this.applyAutoRefresh();
                 this.toggleSettingsModal();
             }
 
