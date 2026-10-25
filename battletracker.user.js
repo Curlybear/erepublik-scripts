@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         BattleTracker
-// @version      0.8
+// @version      0.9
 // @description  Track battles from anywhere
 // @author       Curlybear
 // @updateURL		https://curlybear.eu/erep/battletracker.user.js
@@ -32,6 +32,9 @@
 // 0.8
 // - Stop relying on the game's Array.prototype.unique
 // - Fix removing a tracked region removing the wrong one after the first removal
+
+// 0.9
+// - Battles removed by hand are no longer re-added by region or auto tracking for 24h
 
 // Possible future features:
 // - Track button on battlefield
@@ -626,6 +629,16 @@
 
     localStorage.setItem("battletracker_day", JSON.stringify(erepublik.settings.eDay));
 
+    // Battles removed by hand, as { battleId: removal time in ms }. Entries expire after 24h.
+    const BLOCK_DURATION = 24 * 60 * 60 * 1000;
+    let battletracker_blocked_battles = JSON.parse(localStorage.getItem("battletracker_blocked_battles")) || {};
+    for (const [battleId, removedAt] of Object.entries(battletracker_blocked_battles)) {
+        if (Date.now() - removedAt > BLOCK_DURATION) {
+            delete battletracker_blocked_battles[battleId];
+        }
+    }
+    localStorage.setItem("battletracker_blocked_battles", JSON.stringify(battletracker_blocked_battles));
+
     // Setup the tracker box
     jQuery("body").append("<div id='battletracker'><button id='battletrackerHeader'></button></div>");
 
@@ -783,7 +796,9 @@
             }
         }
 
-        battletracker_battle_ids = uniq(battletracker_battle_ids);
+        battletracker_battle_ids = uniq(battletracker_battle_ids).filter(function (value) {
+            return !(value in battletracker_blocked_battles);
+        });
         //}
 
         // Loop on battles
@@ -837,6 +852,8 @@
                     return value != battle.id;
                 });
                 localStorage.setItem("battletracker_battle_ids", JSON.stringify(battletracker_battle_ids));
+                battletracker_blocked_battles[String(battle.id)] = Date.now();
+                localStorage.setItem("battletracker_blocked_battles", JSON.stringify(battletracker_blocked_battles));
             })
         }
     }
