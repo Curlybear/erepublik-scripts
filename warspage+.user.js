@@ -2,7 +2,7 @@
 // @name		WarsPage+
 // @author		Curlybear
 // @description		Improvements to the wars page (05/2020)
-// @version		0.30
+// @version		0.31
 // @updateURL		https://curlybear.eu/erep/warspage+.user.js
 // @downloadURL		https://curlybear.eu/erep/warspage+.user.js
 // @match		https://www.erepublik.com/*/military/campaigns*
@@ -105,8 +105,13 @@
 // 0.30
 // - Fix Free divs detection
 
+// 0.31
+// - Stop relying on the game's Array.prototype.unique
+
 (function () {
     'use strict';
+    // Local de-duplication instead of the game's Array.prototype.unique, which may not always exist.
+    const uniq = arr => [...new Set(arr)];
 
     var retryCount = -1,
         maxRetry = 6,
@@ -212,24 +217,20 @@
                     jQuery('.trackbutton').text("Untrack")
                     jQuery('.trackall_btn').text("Untrack all")
                     let battles_tracked = JSON.parse(localStorage.getItem("battletracker_battle_ids"));
-                    for (let b in angular.element("#ListCampaignsController").scope().filteredList){
-                        if (b != 'unique'){
-                            battles_tracked.push(angular.element("#ListCampaignsController").scope().filteredList[b].id.toString())
-                        }
+                    for (const battle of Object.values(angular.element("#ListCampaignsController").scope().filteredList)){
+                        battles_tracked.push(battle.id.toString())
                     }
-                    localStorage.setItem("battletracker_battle_ids", JSON.stringify(battles_tracked.unique()));
+                    localStorage.setItem("battletracker_battle_ids", JSON.stringify(uniq(battles_tracked)));
                 } else {
                     jQuery(e.target).text("Track all")
                     jQuery('.trackbutton').text("Track")
                     let battles_tracked = JSON.parse(localStorage.getItem("battletracker_battle_ids"));
-                    for (let b in angular.element("#ListCampaignsController").scope().filteredList){
-                        if (b != 'unique'){
-                            battles_tracked = battles_tracked.filter(function(value) {
-                                return value != angular.element("#ListCampaignsController").scope().filteredList[b].id.toString();
-                            });
-                        }
+                    for (const battle of Object.values(angular.element("#ListCampaignsController").scope().filteredList)){
+                        battles_tracked = battles_tracked.filter(function(value) {
+                            return value != battle.id.toString();
+                        });
                     }
-                    localStorage.setItem("battletracker_battle_ids", JSON.stringify(battles_tracked.unique()));
+                    localStorage.setItem("battletracker_battle_ids", JSON.stringify(uniq(battles_tracked)));
                 }
             })
         }
@@ -289,14 +290,14 @@
                                 jQuery(e.target).text("Untrack")
                                 let battles_tracked = JSON.parse(localStorage.getItem("battletracker_battle_ids"));
                                 battles_tracked.push(battleId)
-                                localStorage.setItem("battletracker_battle_ids", JSON.stringify(battles_tracked.unique()));
+                                localStorage.setItem("battletracker_battle_ids", JSON.stringify(uniq(battles_tracked)));
                             } else {
                                 jQuery(e.target).text("Track")
                                 let battles_tracked = JSON.parse(localStorage.getItem("battletracker_battle_ids"));
                                 battles_tracked = battles_tracked.filter(function(value) {
                                     return value !== battleId.toString();
                                 });
-                                localStorage.setItem("battletracker_battle_ids", JSON.stringify(battles_tracked.unique()));
+                                localStorage.setItem("battletracker_battle_ids", JSON.stringify(uniq(battles_tracked)));
                             }
                         })
                     }
@@ -435,15 +436,11 @@
         function add_div_damage(response, div_id, battle_id, inv_id, def_id) {
             const x = JSON.parse(response);
             jQuery("#divs-damage-tooltip-" + div_id).append("<div class='attacker_damage'></div><div class='defender_damage'></div>");
-            for (let fighter_id in x[inv_id].fighterData) {
-                if (fighter_id != 'unique') {
-                    jQuery("#divs-damage-tooltip-" + div_id + " .attacker_damage").append("<div class='citizen_data'><span class='citizen_name'>" + x[inv_id].fighterData[fighter_id].citizenName + "</span><span class='citizen_damage'>" + x[inv_id].fighterData[fighter_id].value + "</span></div>")
-                }
+            for (const fighter of Object.values(x[inv_id].fighterData)) {
+                jQuery("#divs-damage-tooltip-" + div_id + " .attacker_damage").append("<div class='citizen_data'><span class='citizen_name'>" + fighter.citizenName + "</span><span class='citizen_damage'>" + fighter.value + "</span></div>")
             }
-            for (let fighter_id in x[def_id].fighterData) {
-                if (fighter_id != 'unique') {
-                    jQuery("#divs-damage-tooltip-" + div_id + " .defender_damage").append("<div class='citizen_data'><span class='citizen_damage'>" + x[def_id].fighterData[fighter_id].value + "</span><span class='citizen_name'>" + x[def_id].fighterData[fighter_id].citizenName + "</span></div>")
-                }
+            for (const fighter of Object.values(x[def_id].fighterData)) {
+                jQuery("#divs-damage-tooltip-" + div_id + " .defender_damage").append("<div class='citizen_data'><span class='citizen_damage'>" + fighter.value + "</span><span class='citizen_name'>" + fighter.citizenName + "</span></div>")
             }
         }
     };
