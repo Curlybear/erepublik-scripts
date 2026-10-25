@@ -29,6 +29,20 @@ Cleans up user profiles by hiding unnecessary elements and focusing on important
 ### Company Manager (WIP)
 Streamlines company management by adding a UI to the companies header. Allows for easy selection of companies based on industry and quality.
 
+### [Country Tax Collector](https://curlybear.eu/erep/countrytaxcollector.user.js)
+Adds a Tax Collector panel to country economy pages. Totals the taxes collected from other countries over a chosen day range or term. Features include:
+- Day range and monthly term presets
+- Per-country breakdown with a grand total
+- CSV export of the selected range
+
+### [Custom Company Manager](https://curlybear.eu/erep/custom_company_manager.user.js)
+A full company dashboard, opened from a "Custom company manager" link next to My Companies, built to handle 1000+ companies. Features include:
+- Offline cache of companies, employees, storage and energy, with per-source sync
+- Mass Work as Manager per holding, with optional travel to the holding and back home
+- Employee assignment, overtime and mass gold upgrades, each with a confirmation showing projected production and raw material balance
+- Employee work pool and per-employee work history
+- Regional productivity from the game or from the external productivity API
+
 ### [eRepublik Article Banner](https://curlybear.eu/erep/ereparticlebanner.user.js)
 Displays the titles of the latest 10 articles in a scrolling banner at the top of the page. Refreshes every minute.
 
@@ -43,6 +57,13 @@ Displays detailed productivity data for regions and country economy pages, inclu
 
 ### [eRepublik Feed Filter](https://curlybear.eu/erep/feedfilter.user.js)
 Allows you to hide autoposts and mute specific users in your friends feed. Adds a "Mute for 24h" button to posts and a settings menu.
+
+### [eRepublik Holdings Simulator](https://curlybear.eu/erep/holdings_simulator.user.js)
+Plan and compare holding setups without touching the game. Opened from a "Holdings Simulator" link next to My Companies. Features include:
+- Import your current holdings or build hypothetical ones
+- Daily production estimates using real regional productivity from the external API
+- Market prices and taxes for profit estimates
+- Import and export of plans
 
 ### [eRepublik Inventory Overview](https://curlybear.eu/erep/inventoryoverview.user.js)
 Displays a customizable inventory overview. Features include:
