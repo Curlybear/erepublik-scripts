@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         BattleTracker
-// @version      0.9
+// @version      1.0
 // @description  Track battles from anywhere
 // @author       Curlybear
 // @updateURL		https://curlybear.eu/erep/battletracker.user.js
@@ -35,6 +35,10 @@
 
 // 0.9
 // - Battles removed by hand are no longer re-added by region or auto tracking for 24h
+
+// 1.0
+// - Refresh the table every 60 seconds while the tab is visible, and when coming back to the tab
+// - Fix a stray countdown timer that ticked forever for every upcoming battle
 
 // Possible future features:
 // - Track button on battlefield
@@ -734,20 +738,38 @@
     jQuery("#battletrackertable tr:last").append("<td class='battletracker_header'>Time</td>");
     jQuery("#battletrackertable tr:last").append("<td class='battletracker_header'></td>");
 
-    // Get fighting info
-    var xobjfighting = new XMLHttpRequest();
-    xobjfighting.overrideMimeType("application/json");
-    xobjfighting.open('GET', 'https://www.erepublik.com/en/military/campaignsJson/citizen', true);
-    xobjfighting.onreadystatechange = function () {
-        if (xobjfighting.readyState == 4 && xobjfighting.status == "200") {
-            load_fighting_info(xobjfighting.responseText);
-        }
-    };
-    xobjfighting.send();
+    // Each refresh gets a generation number so a slow, older response never overwrites a newer one
+    const REFRESH_INTERVAL = 60 * 1000;
+    let refreshGeneration = 0;
+    let lastRefresh = 0;
 
+    function refreshBattles() {
+        const generation = ++refreshGeneration;
+        lastRefresh = Date.now();
 
+        // Get fighting info
+        var xobjfighting = new XMLHttpRequest();
+        xobjfighting.overrideMimeType("application/json");
+        xobjfighting.open('GET', 'https://www.erepublik.com/en/military/campaignsJson/citizen', true);
+        xobjfighting.onreadystatechange = function () {
+            if (xobjfighting.readyState == 4 && xobjfighting.status == "200") {
+                load_fighting_info(xobjfighting.responseText, generation);
+            }
+        };
+        xobjfighting.send();
+    }
 
-    function load_fighting_info(response) {
+    refreshBattles();
+
+    // Background tabs are skipped; coming back to the tab refreshes if the data is older than the interval
+    setInterval(function () {
+        if (!document.hidden) refreshBattles();
+    }, REFRESH_INTERVAL);
+    document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && Date.now() - lastRefresh >= REFRESH_INTERVAL) refreshBattles();
+    });
+
+    function load_fighting_info(response, generation) {
         const x = JSON.parse(response);
         var battles = x.battles;
         var statsdivs = []
@@ -769,14 +791,18 @@
         xobj2.open('GET', 'https://www.erepublik.com/en/military/campaignsJson/list', true);
         xobj2.onreadystatechange = function () {
             if (xobj2.readyState == 4 && xobj2.status == "200") {
-                add_battle_info(xobj2.responseText, statsbattles, statsdivs);
+                add_battle_info(xobj2.responseText, statsbattles, statsdivs, generation);
             }
         };
         xobj2.send();
     }
 
 
-    function add_battle_info(response, statsbattles, statsdivs) {
+    function add_battle_info(response, statsbattles, statsdivs, generation) {
+        if (generation !== refreshGeneration) return;
+        // Clear the previous rows only once new data is in, so the table never flashes empty
+        jQuery("#battletrackertable tr:not(.headers)").remove();
+
         const x = JSON.parse(response);
         const battles = x.battles;
         var time = Math.floor(Date.now() / 1000);
@@ -837,7 +863,7 @@
             if (battle.start - time < 0) {
                 jQuery("#battletrackertable tr:last").append("<td class='battletracker_time'>" + secondsToHms(time - battle.start) + "</td>");
             } else {
-                secondsToHmsCountdown(jQuery("#battletrackertable tr:last").append("<td class='battletracker_countdown'></td>"));
+                jQuery("#battletrackertable tr:last").append("<td class='battletracker_countdown'></td>");
                 n(".battletracker_countdown:not(.countdownAdded)", function (t) {
                     t.classList.add("countdownAdded");
                     var n = battle.start - time;
@@ -896,6 +922,8 @@
     function secondsToHmsCountdown(e, t, n, i) {
         var o = Date.now() + 1e3 * t;
         ! function t() {
+            // Stop once the row was replaced by a refresh
+            if (!e.isConnected) return;
             var a = (o - Date.now()) / 1e3;
             if (a < 1) n(e);
             else {
