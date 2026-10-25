@@ -2,7 +2,7 @@
 // @name         Zone Switcher
 // @author       Curlybear
 // @description  Zone/Division Switcher for eRepublik
-// @version      0.20
+// @version      0.21
 // @updateURL    https://curlybear.eu/erep/zoneswitcher.user.js
 // @downloadURL  https://curlybear.eu/erep/zoneswitcher.user.js
 // @match        https://www.erepublik.com/*/military/battlefield/*
@@ -65,6 +65,9 @@
 // - Attempt a fix for div orders
 // - Add light/dark theming
 // - Add hover description on the various fields
+
+// 0.21
+// - Stop relying on the game's Array.prototype.unique
 
 (function() {
     'use strict';
@@ -205,11 +208,9 @@
             processBattleStats(battleData) {
                 const roundData = battleData.stats.current[this.currentRoundNumber];
 
-                for (let divid in this.divs) {
-                    if (divid !== 'unique') {
-                        this.updateZoneDamage(roundData, this.divs[divid]);
-                        this.fetchZoneInfluence(this.divs[divid]);
-                    }
+                for (const zone of Object.values(this.divs)) {
+                    this.updateZoneDamage(roundData, zone);
+                    this.fetchZoneInfluence(zone);
                 }
 
                 this.fetchZoneStatus();
@@ -266,12 +267,10 @@
 
             updateZoneStatus(data) {
                 const statusData = data.division;
-                for (let zone in statusData) {
-                    if (zone !== 'unique') {
-                        const statusElement = jQuery(`#status-${statusData[zone].division}`);
-                        const status = statusData[zone].countries.dominatingCountry == this.leftBattleId ? 'Winning' : 'Losing';
-                        statusElement.text(status).removeClass('winning losing').addClass(status.toLowerCase());
-                    }
+                for (const zone of Object.values(statusData)) {
+                    const statusElement = jQuery(`#status-${zone.division}`);
+                    const status = zone.countries.dominatingCountry == this.leftBattleId ? 'Winning' : 'Losing';
+                    statusElement.text(status).removeClass('winning losing').addClass(status.toLowerCase());
                 }
             }
 
