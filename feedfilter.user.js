@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         eRepublik Feed Filter
 // @author       Curlybear
-// @version      1.0
+// @version      1.1
 // @description  Hide autoposts and mute specific users in eRepublik friends feed
 // @updateURL    https://curlybear.eu/erep/feedfilter.user.js
 // @downloadURL  https://curlybear.eu/erep/feedfilter.user.js
@@ -197,11 +197,12 @@
         const closeBtn = modal.querySelector('.feed-filter-close');
         closeBtn.onclick = () => modal.style.display = 'none';
 
-        window.onclick = (event) => {
+        // addEventListener rather than window.onclick, so the page's own click handler is left alone
+        window.addEventListener('click', (event) => {
             if (event.target == modal) {
                 modal.style.display = 'none';
             }
-        };
+        });
 
         document.getElementById('hideAutopostsCheckbox').addEventListener('change', (e) => {
             settings.hideAutoposts = e.target.checked;
@@ -241,12 +242,12 @@
         };
     }
 
-    function observeForButtonPlacement() {
+    // One observer handles both the options button and posts loaded later (infinite scroll, tab switches)
+    function observeFeed() {
         const observer = new MutationObserver((mutations) => {
-            for (let mutation of mutations) {
-                if (mutation.type === 'childList') {
-                    addOptionsButton();
-                }
+            if (mutations.some(mutation => mutation.type === 'childList')) {
+                addOptionsButton();
+                processNewPosts();
             }
         });
 
@@ -263,14 +264,8 @@
     }
 
     function init() {
-        observeForButtonPlacement();
+        observeFeed();
         filterPosts();
-
-        // Continuously check for new posts
-        setInterval(processNewPosts, 1000); // Check every second
-
-        // Also check when scrolling
-        window.addEventListener('scroll', processNewPosts);
     }
 
     // Run the script when the page is fully loaded
