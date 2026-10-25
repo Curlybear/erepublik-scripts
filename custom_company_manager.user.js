@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.10
+// @version      0.11
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -27,6 +27,8 @@
     const RAW_NAMES = { food: 'FRM', weapon: 'WRM', house: 'HRM', aircraft: 'ARM' };
     const PROD_NAMES = { food: 'Food', weapon: 'Weapons', house: 'Houses', aircraft: 'Aircraft' };
     const TYCOON_BUFFER_SECONDS = 60; // Safety margin: treat pack as expired this many seconds early
+    // Request/response logging. Off by default: payloads carry the CSRF token.
+    const DEBUG = false;
 
     const regionMap = {
         3: { name: "Dobrogea", permalink: "Dobrogea" },
@@ -835,7 +837,7 @@
     // external domains (erepublik.com from a different origin, or the productivity API).
     // apiPost sends form-encoded bodies because the game's endpoints require that content type.
     async function apiPost(url, payload) {
-        console.log(`[API POST Request] URL: ${url}`, payload);
+        if (DEBUG) console.log(`[API POST Request] URL: ${url}`, payload);
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'POST',
@@ -843,7 +845,7 @@
                 data: payload,
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                 onload: function (r) {
-                    console.log(`[API POST Response] URL: ${url} Status: ${r.status}`, r.responseText);
+                    if (DEBUG) console.log(`[API POST Response] URL: ${url} Status: ${r.status}`, r.responseText);
                     (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject('Fail: ' + r.status);
                 },
                 onerror: function (err) {
@@ -855,7 +857,7 @@
     }
 
     async function apiPostJson(url, body) {
-        console.log(`[API POST JSON Request] URL: ${url}`, body);
+        if (DEBUG) console.log(`[API POST JSON Request] URL: ${url}`, body);
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'POST',
@@ -863,7 +865,7 @@
                 data: JSON.stringify(body),
                 headers: { 'Content-Type': 'application/json' },
                 onload: function (r) {
-                    console.log(`[API POST JSON Response] URL: ${url} Status: ${r.status}`, r.responseText);
+                    if (DEBUG) console.log(`[API POST JSON Response] URL: ${url} Status: ${r.status}`, r.responseText);
                     (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject('Fail: ' + r.status);
                 },
                 onerror: function (err) {
@@ -875,14 +877,14 @@
     }
 
     async function apiGet(url, headers = {}) {
-        console.log(`[API GET Request] URL: ${url}`);
+        if (DEBUG) console.log(`[API GET Request] URL: ${url}`);
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
                 headers: headers,
                 onload: function (r) {
-                    console.log(`[API GET Response] URL: ${url} Status: ${r.status}`);
+                    if (DEBUG) console.log(`[API GET Response] URL: ${url} Status: ${r.status}`);
                     (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject('Fail: ' + r.status);
                 },
                 onerror: function (err) {
@@ -894,6 +896,11 @@
     }
 
     const sleep = ms => new Promise(res => setTimeout(res, ms));
+
+    // Escapes text from other players (employee names, avatar URLs) before it goes into HTML.
+    function esc(str) {
+        return String(str ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
 
     // Shared by loadDataFromDb, syncInfrastructure, and syncStorage — all three need to write
     // raw stock levels and storage capacity from the inventory mainStorage entry into a pageDetails object.
@@ -2107,9 +2114,9 @@
         return `<tr class="emp-row" data-cid="${emp.citizenId}" style="cursor:pointer;">
             <td class="col-name" style="height:48px;">
                 <div style="display:flex; align-items:center; gap:10px;">
-                    <img src="${emp.avatar}" style="width:28px; height:28px; border-radius:50%; border: 1px solid var(--outline);">
+                    <img src="${esc(emp.avatar)}" style="width:28px; height:28px; border-radius:50%; border: 1px solid var(--outline);">
                     <div style="display:flex; flex-direction:column;">
-                        <strong style="color:var(--text-main)">${emp.name}</strong>
+                        <strong style="color:var(--text-main)">${esc(emp.name)}</strong>
                         <span style="font-size:0.625rem; color:var(--on-surface-variant)">Since day ${emp.hiredOn}</span>
                     </div>
                 </div>
@@ -2960,13 +2967,15 @@
         const doTravel = document.getElementById('chk-travel-holding').checked;
         const doReturn = document.getElementById('chk-travel-home').checked;
         const targetRegionId = holding ? holding.region_id : null;
+        // Declared outside the try so the return trip in finally can use it after a failure.
+        let residenceRegionId = null;
 
         try {
             const tdResInit = await apiPost('https://www.erepublik.com/en/main/travelData', `_token=${AppState.csrfToken}&holdingId=0&battleId=0`);
             const tdInit = JSON.parse(tdResInit);
             const citizenData = tdInit.citizen || {};
             const currentRegionId = citizenData.region ? citizenData.region.id : (citizenData.residence ? citizenData.residence.regionId : null);
-            const residenceRegionId = citizenData.residence ? citizenData.residence.regionId : await getDbValue('residenceRegionId');
+            residenceRegionId = citizenData.residence ? citizenData.residence.regionId : await getDbValue('residenceRegionId');
 
             if (doTravel && targetRegionId && currentRegionId != targetRegionId) {
                 btnWam.textContent = 'Traveling...';
@@ -2977,6 +2986,16 @@
                     const targetCountryId = tdTarget.regions[targetRegionId].countryId;
                     const movePayload = `check=moveAction&_token=${AppState.csrfToken}&travelMethod=preferCurrency&inRegionId=${targetRegionId}&toCountryId=${targetCountryId}`;
                     await apiPost('https://www.erepublik.com/en/main/travel', movePayload);
+                }
+
+                // The travel response is not reliable to check, so confirm the location before working.
+                const tdResCheck = await apiPost('https://www.erepublik.com/en/main/travelData', `_token=${AppState.csrfToken}&holdingId=0&battleId=0`);
+                const tdCheck = JSON.parse(tdResCheck);
+                const checkCitizen = tdCheck.citizen || {};
+                // Same fallback as currentRegionId above: region can be absent when in the residence region.
+                const regionAfterTravel = checkCitizen.region ? checkCitizen.region.id : (checkCitizen.residence ? checkCitizen.residence.regionId : null);
+                if (regionAfterTravel != targetRegionId) {
+                    throw new Error(`Travel to the holding's region failed (still in region ${regionAfterTravel}). Nothing was worked.`);
                 }
             }
 
@@ -3076,20 +3095,6 @@
             } else {
                 throw new Error('API returned an error: ' + JSON.stringify(res));
             }
-            if (doReturn && residenceRegionId) {
-                const tdResReturn = await apiPost('https://www.erepublik.com/en/main/travelData', `_token=${AppState.csrfToken}&holdingId=0&battleId=0&regionId=${residenceRegionId}`);
-                const tdReturn = JSON.parse(tdResReturn);
-                const currentLocAfterWork = tdReturn.citizen && tdReturn.citizen.region ? tdReturn.citizen.region.id : null;
-
-                if (currentLocAfterWork && currentLocAfterWork != residenceRegionId) {
-                    btnWam.textContent = 'Returning Home (Cooling down)...';
-                    await sleep(5000);
-                    btnWam.textContent = 'Returning Home...';
-                    const targetCountryId = tdReturn.regions[residenceRegionId].countryId;
-                    const movePayload = `check=moveAction&_token=${AppState.csrfToken}&travelMethod=preferCurrency&inRegionId=${residenceRegionId}&toCountryId=${targetCountryId}`;
-                    await apiPost('https://www.erepublik.com/en/main/travel', movePayload);
-                }
-            }
 
             showToast(`Produced successfully! XP: ${res.result.xp}, Health restored: ${res.result.health}`, 'success');
             await loadDataFromDb();
@@ -3102,8 +3107,33 @@
             console.error(e);
             showToast('Error executing WAM / Travel: ' + e, 'error');
         } finally {
+            // Runs on success, failure and captcha alike, so a failed WAM never leaves you in the holding's region.
+            if (doReturn && residenceRegionId) {
+                try {
+                    await returnHome(residenceRegionId, btnWam);
+                } catch (e) {
+                    console.error(e);
+                    showToast('Return home failed: ' + e, 'error');
+                }
+            }
             btnWam.textContent = 'Work as Manager in Holding';
             updateActionUI();
+        }
+    }
+
+    // Travels back to the residence region if the citizen is elsewhere.
+    async function returnHome(residenceRegionId, btnWam) {
+        const tdResReturn = await apiPost('https://www.erepublik.com/en/main/travelData', `_token=${AppState.csrfToken}&holdingId=0&battleId=0&regionId=${residenceRegionId}`);
+        const tdReturn = JSON.parse(tdResReturn);
+        const currentLocAfterWork = tdReturn.citizen && tdReturn.citizen.region ? tdReturn.citizen.region.id : null;
+
+        if (currentLocAfterWork && currentLocAfterWork != residenceRegionId) {
+            btnWam.textContent = 'Returning Home (Cooling down)...';
+            await sleep(5000);
+            btnWam.textContent = 'Returning Home...';
+            const targetCountryId = tdReturn.regions[residenceRegionId].countryId;
+            const movePayload = `check=moveAction&_token=${AppState.csrfToken}&travelMethod=preferCurrency&inRegionId=${residenceRegionId}&toCountryId=${targetCountryId}`;
+            await apiPost('https://www.erepublik.com/en/main/travel', movePayload);
         }
     }
 
@@ -3305,108 +3335,114 @@
         btn.disabled = true;
         btn.textContent = 'Upgrading...';
 
-        let successCount = 0;
-        let successIds = [];
-        let lockRetryQueue = [...toUpgrade];
-        let attempts = 0;
-        const maxAttemptsPerCompany = 3;
-        const companyAttemptCount = {};
-        toUpgrade.forEach(c => companyAttemptCount[c.id] = 0);
+        try {
+            let successCount = 0;
+            let successIds = [];
+            let lockRetryQueue = [...toUpgrade];
+            let attempts = 0;
+            const maxAttemptsPerCompany = 3;
+            const companyAttemptCount = {};
+            toUpgrade.forEach(c => companyAttemptCount[c.id] = 0);
 
-        while (lockRetryQueue.length > 0) {
-            const c = lockRetryQueue.shift();
-            companyAttemptCount[c.id]++;
+            while (lockRetryQueue.length > 0) {
+                const c = lockRetryQueue.shift();
+                companyAttemptCount[c.id]++;
 
-            if (successCount > 0 || attempts > 0) await sleep(500);
-            attempts++;
+                if (successCount > 0 || attempts > 0) await sleep(500);
+                attempts++;
 
-            const levelData = c.upgrades[targetQ];
-            const payload = `_token=${AppState.csrfToken}&type=upgrade&companyId=${c.id}&level=${targetQ}&pin=false&shownCost=${levelData.cost}`;
+                const levelData = c.upgrades[targetQ];
+                const payload = `_token=${AppState.csrfToken}&type=upgrade&companyId=${c.id}&level=${targetQ}&pin=false&shownCost=${levelData.cost}`;
 
-            try {
-                const responseTxt = await apiPost('https://www.erepublik.com/en/economy/upgrade-company', payload);
-                const res = JSON.parse(responseTxt);
+                try {
+                    const responseTxt = await apiPost('https://www.erepublik.com/en/economy/upgrade-company', payload);
+                    const res = JSON.parse(responseTxt);
 
-                if (res.status === true) {
-                    successCount++;
-                    successIds.push(c.id);
-                    btn.textContent = `Upgrading (${successCount}/${toUpgrade.length})...`;
-                } else if (res.message === 'lock') {
-                    if (companyAttemptCount[c.id] < maxAttemptsPerCompany) {
-                        console.warn(`[Upgrade] Company ${c.id} locked. Re-queuing for retry. (Attempt ${companyAttemptCount[c.id]})`);
-                        lockRetryQueue.push(c);
-                        btn.textContent = `Retrying Locks (${lockRetryQueue.length} left)...`;
+                    if (res.status === true) {
+                        successCount++;
+                        successIds.push(c.id);
+                        btn.textContent = `Upgrading (${successCount}/${toUpgrade.length})...`;
+                    } else if (res.message === 'lock') {
+                        if (companyAttemptCount[c.id] < maxAttemptsPerCompany) {
+                            console.warn(`[Upgrade] Company ${c.id} locked. Re-queuing for retry. (Attempt ${companyAttemptCount[c.id]})`);
+                            lockRetryQueue.push(c);
+                            btn.textContent = `Retrying Locks (${lockRetryQueue.length} left)...`;
+                        } else {
+                            console.error(`[Upgrade] Company ${c.id} still locked after ${maxAttemptsPerCompany} attempts. Giving up.`);
+                        }
                     } else {
-                        console.error(`[Upgrade] Company ${c.id} still locked after ${maxAttemptsPerCompany} attempts. Giving up.`);
+                        console.error(`[Upgrade] Company ${c.id} failed:`, res);
                     }
-                } else {
-                    console.error(`[Upgrade] Company ${c.id} failed:`, res);
-                }
-            } catch (e) {
-                console.error(`[Upgrade] Request error for company ${c.id}:`, e);
-            }
-        }
-
-        if (successCount > 0) {
-            console.log(`[Upgrade] Manually updating local DB for ${successCount} successful upgrades.`);
-            const fullCompanies = await getDbValue('companies') || {};
-            successIds.forEach(id => {
-                const comp = fullCompanies[id];
-                if (!comp) return;
-
-                const targetLvlData = comp.upgrades ? comp.upgrades[targetQ] : null;
-
-                comp.quality = targetQ;
-
-                // 1. Update Images (Crucial for filter logic)
-                if (comp.building_img) {
-                    comp.building_img = comp.building_img.replace(/q\d\.png/, `q${targetQ}.png`);
-                }
-                if (comp.products_img) {
-                    comp.products_img = comp.products_img.replace(/q\d_/, `q${targetQ}_`);
-                }
-
-                // 2. Update Stats from Upgrade Map
-                if (targetLvlData) {
-                    if (targetLvlData.employees) comp.employee_limit = targetLvlData.employees.toString();
-                    if (targetLvlData.raw_usage) comp.raw_usage = targetLvlData.raw_usage;
-                }
-
-                // 3. Update internal upgrade map types to reflect new state
-                if (comp.upgrades) {
-                    Object.keys(comp.upgrades).forEach(lvl => {
-                        const l = parseInt(lvl);
-                        if (l < targetQ) comp.upgrades[lvl].type = -1;
-                        else if (l === targetQ) comp.upgrades[lvl].type = 0;
-                        else if (comp.upgrades[lvl].type === 0) comp.upgrades[lvl].type = 1;
-                    });
-                }
-            });
-            await setDbValue('companies', fullCompanies);
-
-            // Deduct gold cost from inventory so loadDataFromDb reads the correct balance
-            const actualGoldSpent = toUpgrade
-                .filter(c => successIds.includes(c.id))
-                .reduce((sum, c) => sum + parseInt((c.upgrades && c.upgrades[targetQ] && c.upgrades[targetQ].cost) || 0), 0);
-            if (actualGoldSpent > 0) {
-                const inv = await getDbValue('inventory');
-                if (Array.isArray(inv)) {
-                    const main = inv.find(s => s.id === 'mainStorage');
-                    const goldItem = main && main.items ? main.items.find(i => i.id === 'gold') : null;
-                    if (goldItem) {
-                        goldItem.amount = Math.max(0, goldItem.amount - actualGoldSpent);
-                        await setDbValue('inventory', inv);
-                    }
+                } catch (e) {
+                    console.error(`[Upgrade] Request error for company ${c.id}:`, e);
                 }
             }
 
-            await loadDataFromDb(); // Re-render UI from updated local DB
+            if (successCount > 0) {
+                console.log(`[Upgrade] Manually updating local DB for ${successCount} successful upgrades.`);
+                const fullCompanies = await getDbValue('companies') || {};
+                successIds.forEach(id => {
+                    const comp = fullCompanies[id];
+                    if (!comp) return;
+
+                    const targetLvlData = comp.upgrades ? comp.upgrades[targetQ] : null;
+
+                    comp.quality = targetQ;
+
+                    // 1. Update Images (Crucial for filter logic)
+                    if (comp.building_img) {
+                        comp.building_img = comp.building_img.replace(/q\d\.png/, `q${targetQ}.png`);
+                    }
+                    if (comp.products_img) {
+                        comp.products_img = comp.products_img.replace(/q\d_/, `q${targetQ}_`);
+                    }
+
+                    // 2. Update Stats from Upgrade Map
+                    if (targetLvlData) {
+                        if (targetLvlData.employees) comp.employee_limit = targetLvlData.employees.toString();
+                        if (targetLvlData.raw_usage) comp.raw_usage = targetLvlData.raw_usage;
+                    }
+
+                    // 3. Update internal upgrade map types to reflect new state
+                    if (comp.upgrades) {
+                        Object.keys(comp.upgrades).forEach(lvl => {
+                            const l = parseInt(lvl);
+                            if (l < targetQ) comp.upgrades[lvl].type = -1;
+                            else if (l === targetQ) comp.upgrades[lvl].type = 0;
+                            else if (comp.upgrades[lvl].type === 0) comp.upgrades[lvl].type = 1;
+                        });
+                    }
+                });
+                await setDbValue('companies', fullCompanies);
+
+                // Deduct gold cost from inventory so loadDataFromDb reads the correct balance
+                const actualGoldSpent = toUpgrade
+                    .filter(c => successIds.includes(c.id))
+                    .reduce((sum, c) => sum + parseInt((c.upgrades && c.upgrades[targetQ] && c.upgrades[targetQ].cost) || 0), 0);
+                if (actualGoldSpent > 0) {
+                    const inv = await getDbValue('inventory');
+                    if (Array.isArray(inv)) {
+                        const main = inv.find(s => s.id === 'mainStorage');
+                        const goldItem = main && main.items ? main.items.find(i => i.id === 'gold') : null;
+                        if (goldItem) {
+                            goldItem.amount = Math.max(0, goldItem.amount - actualGoldSpent);
+                            await setDbValue('inventory', inv);
+                        }
+                    }
+                }
+
+                await loadDataFromDb(); // Re-render UI from updated local DB
+            }
+
+            showToast(`Successfully upgraded ${successCount} companies to Q${targetQ}!`, successCount === toUpgrade.length ? 'success' : 'info');
+        } catch (e) {
+            console.error('[Upgrade] Unexpected error:', e);
+            showToast('Upgrade stopped by an error: ' + e, 'error');
+        } finally {
+            // Always re-enable, so an error never leaves the button stuck until reload.
+            btn.disabled = false;
+            btn.textContent = 'Upgrade Selected';
         }
-
-        showToast(`Successfully upgraded ${successCount} companies to Q${targetQ}!`, successCount === toUpgrade.length ? 'success' : 'info');
-
-        btn.disabled = false;
-        btn.textContent = 'Upgrade Selected';
     }
 
     async function performEmployeeWork() {
@@ -3537,9 +3573,9 @@
         modal.style.cssText = 'background:#0f1420;border:1px solid rgba(255,255,255,0.12);border-radius:8px;min-width:360px;max-width:520px;width:90vw;max-height:82vh;font-family:"Space Grotesk",sans-serif;color:#e8eaf0;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.6);display:flex;flex-direction:column;';
         modal.innerHTML = `
             <div style="background:#141926;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;gap:10px;">
-                ${avatar ? `<img src="${avatar}" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--outline);">` : ''}
+                ${avatar ? `<img src="${esc(avatar)}" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--outline);">` : ''}
                 <div style="display:flex;flex-direction:column;">
-                    <span style="font-weight:600;font-size:13px;color:#e8eaf0;">${name}</span>
+                    <span style="font-weight:600;font-size:13px;color:#e8eaf0;">${esc(name)}</span>
                     ${hiredOn != null ? `<span style="font-size:10px;color:var(--on-surface-variant);font-family:'JetBrains Mono',monospace;">Since day ${hiredOn}</span>` : ''}
                 </div>
             </div>
