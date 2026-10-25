@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         eRepublik Inventory Overview
 // @author       Curlybear
-// @version      2.3
+// @version      2.4
 // @description  Display a customizable inventory overview
 // @updateURL    https://curlybear.eu/erep/inventoryoverview.user.js
 // @downloadURL  https://curlybear.eu/erep/inventoryoverview.user.js
@@ -604,10 +604,11 @@
     };
 
     // Update inventory function
-    const updateInventoryOverview = async () => {
+    // force skips the cache, used after a sale or an offer delete so quantities update right away
+    const updateInventoryOverview = async (force = false) => {
         const cachedInfo = cache.load();
 
-        if (cache.isValid(cachedInfo)) {
+        if (!force && cache.isValid(cachedInfo)) {
             displayInventoryData(cachedInfo.data);
             return;
         }
@@ -698,7 +699,7 @@
             const data = await response.json();
             if (!data.error) {
                 hideSaleModal();
-                updateInventoryOverview();
+                updateInventoryOverview(true);
                 updateOffersOverview();
                 showToast('Item listed successfully', 'success');
             } else {
@@ -730,6 +731,8 @@
             const data = await response.json();
             if (!data.error) {
                 updateOffersOverview();
+                // Deleted offers return their items to storage
+                updateInventoryOverview(true);
                 showToast('Offer deleted successfully', 'success');
             } else {
                 showToast('Failed to delete offer: ' + (data.message || 'Unknown error'), 'error');
