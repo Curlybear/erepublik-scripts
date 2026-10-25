@@ -2,7 +2,7 @@
 // @name         TP Tracking
 // @author		Curlybear
 // @description		Track TP profit
-// @version		0.4
+// @version		0.5
 // @updateURL		https://curlybear.eu/erep/tptracking.user.js
 // @downloadURL		https://curlybear.eu/erep/tptracking.user.js
 // @include		https://www.erepublik.com/*
@@ -14,6 +14,7 @@
 // 0.2 - Add Taxrate query + apply taxrate to income
 // 0.3 - Init previous day to see TP increase from installation on first day
 // 0.4 - Add total and table below sidebar profile info
+// 0.5 - Fix two-digit tax rates, refresh tax rate daily
 
 (function () {
     'use strict';
@@ -24,28 +25,38 @@
         return parts.join(".");
     }
 
+    // Tax rate is refreshed once per eRep day so a move or a tax change is picked up
     let taxrate = JSON.parse(localStorage.getItem("tp_taxrate"));
-    if (!taxrate) {
+    const taxrateDay = JSON.parse(localStorage.getItem("tp_taxrate_day"));
+    if (taxrate === null || taxrateDay !== erepublik.settings.eDay) {
         var xobj2 = new XMLHttpRequest();
         xobj2.overrideMimeType("application/json");
         xobj2.open('GET', 'https://www.erepublik.com/en/country/economy/' + erepublik.citizen.countryLocationPermalink);
         xobj2.onreadystatechange = function () {
-            if (xobj2.readyState == 4 && xobj2.status == "200") {
-                updateTax(xobj2.responseText);
+            if (xobj2.readyState == 4) {
+                if (xobj2.status == "200") {
+                    updateTax(xobj2.responseText);
+                }
+                fetchProfile();
             }
         };
         xobj2.send();
+    } else {
+        fetchProfile();
     }
 
-    var xobj = new XMLHttpRequest();
-    xobj.overrideMimeType("application/json");
-    xobj.open('GET', 'https://www.erepublik.com/en/main/citizen-profile-json/' + erepublik.citizen.citizenId);
-    xobj.onreadystatechange = function () {
-        if (xobj.readyState == 4 && xobj.status == "200") {
-            doStuff(xobj.responseText);
-        }
-    };
-    xobj.send();
+    // Fetched after the tax rate so income is never computed with a missing rate
+    function fetchProfile() {
+        var xobj = new XMLHttpRequest();
+        xobj.overrideMimeType("application/json");
+        xobj.open('GET', 'https://www.erepublik.com/en/main/citizen-profile-json/' + erepublik.citizen.citizenId);
+        xobj.onreadystatechange = function () {
+            if (xobj.readyState == 4 && xobj.status == "200") {
+                doStuff(xobj.responseText);
+            }
+        };
+        xobj.send();
+    }
 
     function doStuff(response) {
         const citizenData = JSON.parse(response);
@@ -105,9 +116,13 @@
     }
 
     function updateTax(response) {
-        let re = /(\d)\.00%/;
+        // \d+ so two-digit rates (e.g. 15.00%) are read in full
+        let re = /(\d+)\.00%/;
         let taxes = response.match(re);
-        localStorage.setItem("tp_taxrate", taxes[1]);
+        if (!taxes) return;
+        taxrate = parseInt(taxes[1], 10);
+        localStorage.setItem("tp_taxrate", taxrate);
+        localStorage.setItem("tp_taxrate_day", erepublik.settings.eDay);
     }
 
     // Prettyfying stuff

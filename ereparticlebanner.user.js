@@ -3,7 +3,7 @@
 // @author		Curlybear
 // @updateURL		https://curlybear.eu/erep/ereparticlebanner.user.js
 // @downloadURL		https://curlybear.eu/erep/ereparticlebanner.user.js
-// @version      0.1
+// @version      0.2
 // @description  Displays the titles of the latest 10 articles in a scrolling banner, refreshes every minute
 // @match        https://www.erepublik.com/*
 // @exclude      https://www.erepublik.com/*/*
@@ -47,8 +47,17 @@ function createOrUpdateBanner() {
     return bannerContainer.querySelector('#erepublikBannerContent');
 }
 
+// Titles are player-written, so they are set as text, never as HTML
 function updateBanner(bannerContent, posts) {
-    bannerContent.innerHTML = posts.map(post => `<a href="${post.link}" target="_blank">${post.title}</a>`).join(' ● ');
+    bannerContent.textContent = '';
+    posts.forEach((post, i) => {
+        if (i > 0) bannerContent.appendChild(document.createTextNode(' ● '));
+        const a = document.createElement('a');
+        if (/^https?:\/\//i.test(post.link)) a.href = post.link;
+        a.target = '_blank';
+        a.textContent = post.title;
+        bannerContent.appendChild(a);
+    });
 }
 
 function fetchAndDisplayPosts() {
