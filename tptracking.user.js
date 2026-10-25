@@ -2,7 +2,7 @@
 // @name         TP Tracking
 // @author		Curlybear
 // @description		Track TP profit
-// @version		0.5
+// @version		0.6
 // @updateURL		https://curlybear.eu/erep/tptracking.user.js
 // @downloadURL		https://curlybear.eu/erep/tptracking.user.js
 // @include		https://www.erepublik.com/*
@@ -15,6 +15,7 @@
 // 0.3 - Init previous day to see TP increase from installation on first day
 // 0.4 - Add total and table below sidebar profile info
 // 0.5 - Fix two-digit tax rates, refresh tax rate daily
+// 0.6 - Fetch the profile at most every 2 minutes instead of on every page
 
 (function () {
     'use strict';
@@ -45,31 +46,48 @@
         fetchProfile();
     }
 
-    // Fetched after the tax rate so income is never computed with a missing rate
+    // Fetched after the tax rate so income is never computed with a missing rate.
+    // Skipped when fetched less than 2 minutes ago and today is already recorded; the table then uses stored data.
+    const PROFILE_CACHE_TTL = 2 * 60 * 1000;
     function fetchProfile() {
+        let lastFetch = 0;
+        try {
+            lastFetch = parseInt(sessionStorage.getItem("tp_last_fetch"), 10) || 0;
+        } catch (e) { }
+        const stored = JSON.parse(localStorage.getItem("tp_data"));
+        if (Date.now() - lastFetch < PROFILE_CACHE_TTL && stored && stored[erepublik.settings.eDay] !== undefined) {
+            doStuff(null);
+            return;
+        }
+
         var xobj = new XMLHttpRequest();
         xobj.overrideMimeType("application/json");
         xobj.open('GET', 'https://www.erepublik.com/en/main/citizen-profile-json/' + erepublik.citizen.citizenId);
         xobj.onreadystatechange = function () {
             if (xobj.readyState == 4 && xobj.status == "200") {
-                doStuff(xobj.responseText);
+                try {
+                    sessionStorage.setItem("tp_last_fetch", Date.now());
+                } catch (e) { }
+                doStuff(JSON.parse(xobj.responseText).military.truePatriot.damage);
             }
         };
         xobj.send();
     }
 
-    function doStuff(response) {
-        const citizenData = JSON.parse(response);
+    // damage: today's TP damage, or null to render from stored data only
+    function doStuff(damage) {
         let currentDay = erepublik.settings.eDay;
         let data = JSON.parse(localStorage.getItem("tp_data"));
 
-        if (!data) {
-            data = {};
-            data[currentDay - 1] = citizenData.military.truePatriot.damage;
-        }
+        if (damage !== null) {
+            if (!data) {
+                data = {};
+                data[currentDay - 1] = damage;
+            }
 
-        data[currentDay] = citizenData.military.truePatriot.damage;
-        localStorage.setItem("tp_data", JSON.stringify(data));
+            data[currentDay] = damage;
+            localStorage.setItem("tp_data", JSON.stringify(data));
+        }
 
         if (location.pathname.includes(erepublik.citizen.citizenId)) {
             let ten_days = Object.keys(data).slice(-11);
