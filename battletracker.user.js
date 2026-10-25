@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         BattleTracker
-// @version      0.7
+// @version      0.8
 // @description  Track battles from anywhere
 // @author       Curlybear
 // @updateURL		https://curlybear.eu/erep/battletracker.user.js
@@ -29,12 +29,18 @@
 // 0.6
 // - Add auto tracking in fought battle option
 
+// 0.8
+// - Stop relying on the game's Array.prototype.unique
+// - Fix removing a tracked region removing the wrong one after the first removal
+
 // Possible future features:
 // - Track button on battlefield
 // - Epic status visual representation, somehow
 
 (function () {
     'use strict';
+    // Local de-duplication instead of the game's Array.prototype.unique, which may not always exist.
+    const uniq = arr => [...new Set(arr)];
     let selectedRegion = "Abkhazia";
     const regions = ["Abkhazia",
         "Abruzzo",
@@ -635,7 +641,7 @@
 
     if (battletracker_trackedregions == null) {
         battletracker_trackedregions = []
-        localStorage.setItem("battletracker_trackedregions", JSON.stringify(battletracker_trackedregions.unique()));
+        localStorage.setItem("battletracker_trackedregions", JSON.stringify(battletracker_trackedregions));
     }
 
     let battletracker_autotrack_fought = localStorage.getItem("battletracker_autotrack_fought");
@@ -662,19 +668,17 @@
     });
 
     // Display tracked regions
-    for (let region in battletracker_trackedregions) {
-        if (region != 'unique') {
-            jQuery('#battletracker_setting_tracked_regions_list').append("<li id='battletracker_setting_region_" + battletracker_trackedregions[region].replace(/\s/g, '') + "'>" + battletracker_trackedregions[region] + "</li>")
+    for (const regionName of battletracker_trackedregions) {
+        jQuery('#battletracker_setting_tracked_regions_list').append("<li id='battletracker_setting_region_" + regionName.replace(/\s/g, '') + "'>" + regionName + "</li>")
 
-            let button = jQuery("#battletracker_setting_tracked_regions_list li:last").append("<span class='battletracker_remove'>✖</span>");
-            button.click(function () {
-                jQuery("#battletracker_setting_region_" + battletracker_trackedregions[region].replace(/\s/g, '')).remove();
-                battletracker_trackedregions = battletracker_trackedregions.filter(function (value) {
-                    return value !== battletracker_trackedregions[region];
-                });
-                localStorage.setItem("battletracker_trackedregions", JSON.stringify(battletracker_trackedregions.unique()));
-            })
-        }
+        let button = jQuery("#battletracker_setting_tracked_regions_list li:last").append("<span class='battletracker_remove'>✖</span>");
+        button.click(function () {
+            jQuery("#battletracker_setting_region_" + regionName.replace(/\s/g, '')).remove();
+            battletracker_trackedregions = battletracker_trackedregions.filter(function (value) {
+                return value !== regionName;
+            });
+            localStorage.setItem("battletracker_trackedregions", JSON.stringify(uniq(battletracker_trackedregions)));
+        })
     }
 
     function addRegion(region) {
@@ -683,10 +687,8 @@
         jQuery('#battletracker_setting_tracked_regions_list').append("<li>" + selectedRegion + "</li>")
     }
 
-    for (const region in regions) {
-        if (region != 'unique') {
-            jQuery("#battletracker_setting_comboBoxRegions").append("<option value='" + regions[region] + "'>" + regions[region] + "</select>")
-        }
+    for (const regionName of regions) {
+        jQuery("#battletracker_setting_comboBoxRegions").append("<option value='" + regionName + "'>" + regionName + "</select>")
     }
 
     const battletracker_setting_comboBoxRegions = document.getElementById("battletracker_setting_comboBoxRegions");
@@ -737,16 +739,16 @@
         var battles = x.battles;
         var statsdivs = []
         var statsbattles = []
-        for (let b in battles) {
-            if (battles[b].citizenStats) {
-                for (let s in battles[b].citizenStats) {
+        for (const [b, battle] of Object.entries(battles)) {
+            if (battle.citizenStats) {
+                for (const stats of Object.values(battle.citizenStats)) {
                     statsbattles.push(b)
-                    statsdivs = jQuery.merge(statsdivs, battles[b].citizenStats[s].activeZones)
+                    statsdivs = jQuery.merge(statsdivs, stats.activeZones)
                 }
             }
         }
 
-        statsbattles = statsbattles.unique()
+        statsbattles = uniq(statsbattles)
 
         // Get battle info
         var xobj2 = new XMLHttpRequest();
@@ -770,10 +772,8 @@
         // Find battleids of tracked regions
         //for (region in battletracker_trackedregions) {
         let filteredBattles = Object.entries(battles).filter(([key, value]) => battletracker_trackedregions.includes(value.region.name));
-        for (let battle in filteredBattles) {
-            if (battle != 'unique') {
-                battletracker_battle_ids.push(filteredBattles[battle][0])
-            }
+        for (const [battleId] of filteredBattles) {
+            battletracker_battle_ids.push(battleId)
         }
 
         let autotrack = localStorage.getItem("battletracker_autotrack_fought");
@@ -783,7 +783,7 @@
             }
         }
 
-        battletracker_battle_ids = battletracker_battle_ids.unique();
+        battletracker_battle_ids = uniq(battletracker_battle_ids);
         //}
 
         // Loop on battles
