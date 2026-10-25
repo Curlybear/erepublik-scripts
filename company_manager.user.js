@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Company Manager
-// @version      0.7
+// @version      0.8
 // @description  Streamline company management in eRepublik
 // @updateURL    https://curlybear.eu/erep/company_manager.user.js
 // @downloadURL  https://curlybear.eu/erep/company_manager.user.js
@@ -8,6 +8,7 @@
 // @match        https://www.erepublik.com/*/economy/myCompanies*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @connect      productivityapi.curlybear.eu
 // ==/UserScript==
 
 (function () {
