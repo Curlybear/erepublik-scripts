@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         eRepublik Inventory Overview
 // @author       Curlybear
-// @version      2.4
+// @version      2.5
 // @description  Display a customizable inventory overview
 // @updateURL    https://curlybear.eu/erep/inventoryoverview.user.js
 // @downloadURL  https://curlybear.eu/erep/inventoryoverview.user.js
@@ -26,8 +26,7 @@
         blueprints: true,
         inProduction: true,
         width: 330,
-        anchor: 'left',
-        totalStorage: 1000000
+        anchor: 'left'
     };
 
     // Sellable items configuration
@@ -160,7 +159,15 @@
 
             #inventory-overview .item-icon { width: 40px; height: 40px; }
             #inventory-overview .item-amount { font-size: 11px; margin-top: 2px; color: var(--on-surface); }
-            #inventory-overview .storage-info { margin-bottom: 5px; font-size: 11px; color: var(--on-surface-variant); }
+            #inventory-overview .storage-info { margin-bottom: 8px; padding: 8px 10px; background-color: var(--surface-container-low); border: 1px solid var(--ghost-border); border-radius: 2px; font-size: 11px; color: var(--on-surface-variant); }
+            #inventory-overview .storage-row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+            #inventory-overview .storage-values { color: var(--on-surface); font-variant-numeric: tabular-nums; }
+            #inventory-overview .storage-bar { height: 4px; background-color: var(--surface-container-highest); border-radius: 2px; overflow: hidden; }
+            #inventory-overview .storage-fill { height: 100%; background-color: var(--primary); border-radius: 2px; }
+            #inventory-overview .storage-pct { text-align: right; font-size: 10px; margin-top: 3px; }
+            #inventory-overview .storage-info.over .storage-fill { background-color: var(--error-container); }
+            #inventory-overview .storage-info.over .storage-values { color: var(--on-error-container); animation: storage-pulse 1s ease-in-out infinite; }
+            @keyframes storage-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
             #inventory-toggle.left-anchored { left: 10px; }
             #config-toggle.left-anchored { left: 120px; }
@@ -400,17 +407,12 @@
         const activeEnhancements = data.find(section => section.id === 'activeEnhancements');
         const inProduction = data.find(section => section.id === 'inProduction');
 
+        // Storage figures come straight from the game's mainStorage.status, the same source
+        // Custom Company Manager uses, so capacity no longer has to be entered by hand.
         const status = {
-            usedStorage: 0,
-            totalStorage: config.totalStorage || 1000000,
-            storagePercentage: '0%'
+            usedStorage: mainStorage?.status?.usedStorage || 0,
+            totalStorage: mainStorage?.status?.totalStorage || 0
         };
-
-        if (mainStorage?.items) {
-            status.usedStorage = mainStorage.items.reduce((total, item) =>
-                total + (item.attributes?.storage || 0), 0);
-            status.storagePercentage = ((status.usedStorage / status.totalStorage) * 100).toFixed(1) + '%';
-        }
 
         const organizedData = {
             inventoryItems: {
@@ -480,6 +482,21 @@
     };
 
     // Display Functions
+    const renderStorageHtml = ({ usedStorage: used, totalStorage: total }) => {
+        if (!total) return '';
+        const pct = Math.round(Math.min(100, used / total * 100));
+        const isOver = used > total;
+        return `
+            <div class="storage-info${isOver ? ' over' : ''}">
+                <div class="storage-row">
+                    <span>Storage${isOver ? ' ⚠' : ''}</span>
+                    <span class="storage-values">${used.toLocaleString()} / ${total.toLocaleString()}</span>
+                </div>
+                <div class="storage-bar"><div class="storage-fill" style="width:${pct}%;"></div></div>
+                <div class="storage-pct">${pct}%</div>
+            </div>`;
+    };
+
     const displayInventoryData = (data) => {
         const { inventoryItems, inventoryStatus: status } = data;
 
@@ -488,7 +505,7 @@
                 <h3>Inventory Overview</h3>
             </div>
             <div class="modal-body">
-            <div class="storage-info">Storage: ${status.usedStorage} / ${status.totalStorage} (${status.storagePercentage})</div>
+            ${renderStorageHtml(status)}
         `;
 
         const addItems = (category, items, configKey, itemFilter) => {
@@ -784,10 +801,6 @@
                 Width: <span id="width-value">330</span>px
                 <input type="range" id="width-slider" min="200" max="500" step="10" value="330">
             </label>
-            <label>
-                Total Storage:
-                <input type="number" id="config-total-storage" min="1000" step="1000" value="1000000" style="width: 100px;">
-            </label>
             
             <div>
                 Position:
@@ -890,12 +903,6 @@
         widthValue.textContent = config.width;
         inventoryOverview.style.width = `${config.width}px`;
 
-        // Initialize storage input
-        const storageInput = document.getElementById('config-total-storage');
-        if (storageInput) {
-            storageInput.value = config.totalStorage || 1000000;
-        }
-
         // Initialize theme
 
 
@@ -953,8 +960,7 @@
                 inProduction: document.getElementById('config-in-production').checked,
                 width: parseInt(widthSlider.value),
 
-                anchor: document.querySelector('input[name="anchor"]:checked').value,
-                totalStorage: parseInt(document.getElementById('config-total-storage').value) || 1000000
+                anchor: document.querySelector('input[name="anchor"]:checked').value
             };
 
             configManager.save(config);
