@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Anniversary Quest Helper
-// @version      1.9
+// @version      2.0
 // @description  Displays total remaining time for locked locations and required miles and tokens for unclaimed locations for the Anniversary Quest on eRepublik.
 // @author       Curlybear
 // @match        https://www.erepublik.com/*/main/anniversaryQuest
@@ -15,6 +15,8 @@
     'use strict';
 
     const DATA_URL = "https://www.erepublik.com/en/main/anniversaryQuestData";
+    const REWARDS_URL = "https://curlybear.eu/erep/AnniversaryRewards.html";
+    const REWARDS_LINK = `<p style="margin-top: 10px;"><a href="${REWARDS_URL}" target="_blank" rel="noopener">See every reward on the map &rarr;</a></p>`;
 
     // Fetch the data
     $.getJSON(DATA_URL, function (data) {
@@ -89,6 +91,7 @@
                 <p><strong>Total Remaining Time (Locked + Unlocking Locations):</strong> ${formatTimeWithDays(totalRemainingTime)}</p>
                 <p><strong>Total Miles Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughMiles ? 'green' : 'red'};">${formatNumber(totalMilesNeeded)} (You have: ${formatNumber(inventory.miles)})</span></p>
                 <p><strong>Total Tokens Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughTokens ? 'green' : 'red'};">${formatNumber(totalTokensNeeded)} (You have: ${formatNumber(inventory.tokens)})</span></p>
+                ${REWARDS_LINK}
             </div>
         `);
 
@@ -107,10 +110,11 @@
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             ">
                 <h3 style="margin-bottom: 10px; font-size: 18px; color: #333;">Anniversary Quest Summary</h3>
-                <p></p>
+                <p class="helper-message"></p>
+                ${REWARDS_LINK}
             </div>
         `);
-        container.find('p').text(message);
+        container.find('.helper-message').text(message);
         $('#anniversaryQuestMap').after(container);
     }
 
