@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Anniversary Quest Helper
-// @version      1.8
+// @version      1.9
 // @description  Displays total remaining time for locked locations and required miles and tokens for unclaimed locations for the Anniversary Quest on eRepublik.
 // @author       Curlybear
 // @match        https://www.erepublik.com/*/main/anniversaryQuest
@@ -18,10 +18,10 @@
 
     // Fetch the data
     $.getJSON(DATA_URL, function (data) {
-        const inventory = data.status.inventory;
-        const progress = data.status.progress;
-        const queue = data.status.queue;
-        const cities = data.cities;
+        const inventory = data.status.inventory || {};
+        const progress = data.status.progress || {};
+        const queue = data.status.queue || [];
+        const cities = data.cities || {};
 
         let totalRemainingTime = 0;
         let totalMilesNeeded = 0;
@@ -55,9 +55,14 @@
             }
         }
 
+        // The data endpoint no longer returns what the player owns (its "inventory" now only holds
+        // distanceNeeded/tokensNeeded/timeNeeded), so read the balances shown on the quest page.
+        const ownedMiles = inventory.miles ?? readPageNumber('#travelDistance');
+        const ownedTokens = inventory.tokens ?? readPageNumber('#eventTokens');
+
         // Check if the user has enough miles and tokens
-        const hasEnoughMiles = inventory.miles >= totalMilesNeeded;
-        const hasEnoughTokens = inventory.tokens >= totalTokensNeeded;
+        const hasEnoughMiles = ownedMiles >= totalMilesNeeded;
+        const hasEnoughTokens = ownedTokens >= totalTokensNeeded;
 
         // Styling for the helper
         const container = $(`
@@ -71,8 +76,8 @@
             ">
                 <h3 style="margin-bottom: 10px; font-size: 18px; color: #333;">Anniversary Quest Summary</h3>
                 <p><strong>Total Remaining Time (Locked + Unlocking Locations):</strong> ${formatTimeWithDays(totalRemainingTime)}</p>
-                <p><strong>Total Miles Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughMiles ? 'green' : 'red'};">${formatNumber(totalMilesNeeded)} (You have: ${formatNumber(inventory.miles)})</span></p>
-                <p><strong>Total Tokens Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughTokens ? 'green' : 'red'};">${formatNumber(totalTokensNeeded)} (You have: ${formatNumber(inventory.tokens)})</span></p>
+                <p><strong>Total Miles Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughMiles ? 'green' : 'red'};">${formatNumber(totalMilesNeeded)} (You have: ${formatNumber(ownedMiles)})</span></p>
+                <p><strong>Total Tokens Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughTokens ? 'green' : 'red'};">${formatNumber(totalTokensNeeded)} (You have: ${formatNumber(ownedTokens)})</span></p>
             </div>
         `);
 
@@ -89,6 +94,13 @@
     }
 
     function formatNumber(num) {
-        return num.toLocaleString('en-US');
+        return Number.isFinite(num) ? num.toLocaleString('en-US') : '?';
+    }
+
+    // Reads a number such as "1,234 km" from the page; undefined if the element is missing.
+    function readPageNumber(selector) {
+        const text = $(selector).first().text();
+        const digits = text.replace(/[^\d]/g, '');
+        return digits ? parseInt(digits, 10) : undefined;
     }
 })();
