@@ -18,10 +18,26 @@
 
     // Fetch the data
     $.getJSON(DATA_URL, function (data) {
-        const inventory = data.status.inventory || {};
-        const progress = data.status.progress || {};
-        const queue = data.status.queue || [];
-        const cities = data.cities || {};
+        try {
+            renderSummary(data);
+        } catch (error) {
+            console.error('Anniversary Quest Helper:', error);
+            renderMessage('Could not read the Anniversary Quest data.');
+        }
+    });
+
+    function renderSummary(data) {
+        const inventory = data.status.inventory;
+        const progress = data.status.progress;
+        const queue = data.status.queue;
+        const cities = data.cities;
+
+        // Before the event starts, the inventory only lists what is needed
+        // (distanceNeeded, tokensNeeded, timeNeeded) and not the player's miles and tokens.
+        if (!inventory || inventory.miles === undefined || inventory.tokens === undefined) {
+            renderMessage('Event not started yet.');
+            return;
+        }
 
         let totalRemainingTime = 0;
         let totalMilesNeeded = 0;
@@ -55,14 +71,9 @@
             }
         }
 
-        // The data endpoint no longer returns what the player owns (its "inventory" now only holds
-        // distanceNeeded/tokensNeeded/timeNeeded), so read the balances shown on the quest page.
-        const ownedMiles = inventory.miles ?? readPageNumber('#travelDistance');
-        const ownedTokens = inventory.tokens ?? readPageNumber('#eventTokens');
-
         // Check if the user has enough miles and tokens
-        const hasEnoughMiles = ownedMiles >= totalMilesNeeded;
-        const hasEnoughTokens = ownedTokens >= totalTokensNeeded;
+        const hasEnoughMiles = inventory.miles >= totalMilesNeeded;
+        const hasEnoughTokens = inventory.tokens >= totalTokensNeeded;
 
         // Styling for the helper
         const container = $(`
@@ -76,14 +87,32 @@
             ">
                 <h3 style="margin-bottom: 10px; font-size: 18px; color: #333;">Anniversary Quest Summary</h3>
                 <p><strong>Total Remaining Time (Locked + Unlocking Locations):</strong> ${formatTimeWithDays(totalRemainingTime)}</p>
-                <p><strong>Total Miles Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughMiles ? 'green' : 'red'};">${formatNumber(totalMilesNeeded)} (You have: ${formatNumber(ownedMiles)})</span></p>
-                <p><strong>Total Tokens Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughTokens ? 'green' : 'red'};">${formatNumber(totalTokensNeeded)} (You have: ${formatNumber(ownedTokens)})</span></p>
+                <p><strong>Total Miles Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughMiles ? 'green' : 'red'};">${formatNumber(totalMilesNeeded)} (You have: ${formatNumber(inventory.miles)})</span></p>
+                <p><strong>Total Tokens Required (Unlocked & Unclaimed Locations):</strong> <span style="color: ${hasEnoughTokens ? 'green' : 'red'};">${formatNumber(totalTokensNeeded)} (You have: ${formatNumber(inventory.tokens)})</span></p>
             </div>
         `);
 
         // Append the container after the #anniversaryQuestMap
         $('#anniversaryQuestMap').after(container);
-    });
+    }
+
+    function renderMessage(message) {
+        const container = $(`
+            <div id="anniversary-helper" style="
+                background: #f4f4f4;
+                border: 2px solid #ccc;
+                border-radius: 8px;
+                padding: 15px;
+                margin: 15px 0;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            ">
+                <h3 style="margin-bottom: 10px; font-size: 18px; color: #333;">Anniversary Quest Summary</h3>
+                <p></p>
+            </div>
+        `);
+        container.find('p').text(message);
+        $('#anniversaryQuestMap').after(container);
+    }
 
     function formatTimeWithDays(seconds) {
         const days = Math.floor(seconds / 86400);
@@ -95,12 +124,5 @@
 
     function formatNumber(num) {
         return Number.isFinite(num) ? num.toLocaleString('en-US') : '?';
-    }
-
-    // Reads a number such as "1,234 km" from the page; undefined if the element is missing.
-    function readPageNumber(selector) {
-        const text = $(selector).first().text();
-        const digits = text.replace(/[^\d]/g, '');
-        return digits ? parseInt(digits, 10) : undefined;
     }
 })();
