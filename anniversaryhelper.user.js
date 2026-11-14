@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Anniversary Quest Helper
-// @version      1.8
+// @version      1.9
 // @description  Displays total remaining time for locked locations and required miles and tokens for unclaimed locations for the Anniversary Quest on eRepublik.
 // @author       Curlybear
 // @match        https://www.erepublik.com/*/main/anniversaryQuest
@@ -18,10 +18,26 @@
 
     // Fetch the data
     $.getJSON(DATA_URL, function (data) {
+        try {
+            renderSummary(data);
+        } catch (error) {
+            console.error('Anniversary Quest Helper:', error);
+            renderMessage('Could not read the Anniversary Quest data.');
+        }
+    });
+
+    function renderSummary(data) {
         const inventory = data.status.inventory;
         const progress = data.status.progress;
         const queue = data.status.queue;
         const cities = data.cities;
+
+        // Before the event starts, the inventory only lists what is needed
+        // (distanceNeeded, tokensNeeded, timeNeeded) and not the player's miles and tokens.
+        if (!inventory || inventory.miles === undefined || inventory.tokens === undefined) {
+            renderMessage('Event not started yet.');
+            return;
+        }
 
         let totalRemainingTime = 0;
         let totalMilesNeeded = 0;
@@ -78,7 +94,25 @@
 
         // Append the container after the #anniversaryQuestMap
         $('#anniversaryQuestMap').after(container);
-    });
+    }
+
+    function renderMessage(message) {
+        const container = $(`
+            <div id="anniversary-helper" style="
+                background: #f4f4f4;
+                border: 2px solid #ccc;
+                border-radius: 8px;
+                padding: 15px;
+                margin: 15px 0;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            ">
+                <h3 style="margin-bottom: 10px; font-size: 18px; color: #333;">Anniversary Quest Summary</h3>
+                <p></p>
+            </div>
+        `);
+        container.find('p').text(message);
+        $('#anniversaryQuestMap').after(container);
+    }
 
     function formatTimeWithDays(seconds) {
         const days = Math.floor(seconds / 86400);
@@ -89,6 +123,6 @@
     }
 
     function formatNumber(num) {
-        return num.toLocaleString('en-US');
+        return Number.isFinite(num) ? num.toLocaleString('en-US') : '?';
     }
 })();
