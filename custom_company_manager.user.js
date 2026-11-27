@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.11
+// @version      0.12
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -716,6 +716,8 @@
         _assignEntries: [],
         _assignRegionIds: [],
         employeeWorkPool: null,          // running pool; null = no baseline (infra sync required)
+        upgradePromo: null,              // { general, house } promo multipliers from myCompanies (e.g. Black Friday); null = no promo
+        upgradePriceMode: null,          // promo price formula confirmed by the server on a successful upgrade
         lastKnownWorksReceivedDay: null, // game day of last workforce sync
         lastKnownWorksReceived: 0,       // worksReceived seen on that day
         lastTycoonUntilForBonus: 0,      // tycoonUntil value for which +150 was deposited — prevents re-deposit on repeated data loads while the same pack is active
@@ -1694,6 +1696,8 @@
         if (!AppState.syncSettings.intelligence) AppState.syncSettings.intelligence = { auto: true };
 
         AppState.productivityCache = await getDbValue('productivityCache') || {};
+        AppState.upgradePromo = await getDbValue('upgradePromo') || null;
+        AppState.upgradePriceMode = await getDbValue('upgradePriceMode') || null;
 
         // Work Pool state
         const poolVal = await getDbValue('employeeWorkPool');
@@ -2415,8 +2419,9 @@
                     const amountToUpgrade = Math.min(parseInt(document.getElementById('upgrade-amount').value) || 1, upgradableSet.length);
                     const sampleComp = upgradableSet[0];
                     const totalCost = (sampleComp && sampleComp.upgrades && sampleComp.upgrades[targetQ])
-                        ? parseInt(sampleComp.upgrades[targetQ].cost) * amountToUpgrade
+                        ? getEstimatedUpgradeCost(sampleComp, targetQ) * amountToUpgrade
                         : 0;
+                    const promoNote = getUpgradePromoNote(sampleComp);
 
                     btnUpgrade.disabled = !AppState.csrfToken;
                     upgradeSummary.innerHTML = `
@@ -2425,6 +2430,7 @@
                             → Region: <strong>${regionData.name}</strong><br>
                             → Target: <strong>${amountToUpgrade} ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}</strong><br>
                             → Est. Total Cost: <strong style="color:var(--primary)">${totalCost.toLocaleString()} Gold</strong>
+                            ${promoNote ? `<br><span style="opacity:0.8">${promoNote}</span>` : ''}
                         </div>
                     `;
                 }
@@ -2593,6 +2599,30 @@
                 await setDbValue('companies', companies);
                 await setDbValue('holdingCompanies', holdings);
                 await setDbValue('energyData', energy);
+
+                // Sales such as Black Friday discount company upgrades. The game exposes the discount as
+                // promoMultiplier / promoMultiplierHouse and rejects an upgrade whose shownCost doesn't match
+                // the discounted price ("Wrong price shown"). Missing vars just mean no promo today.
+                try {
+                    const promoMatch = data.match(/var promoMultiplier\s*=\s*(?:parseFloat\()?\s*['"]?([\d.]+)/);
+                    const promoHouseMatch = data.match(/var promoMultiplierHouse\s*=\s*(?:parseFloat\()?\s*['"]?([\d.]+)/);
+                    const general = promoMatch ? parseFloat(promoMatch[1]) : 0;
+                    const house = promoHouseMatch ? parseFloat(promoHouseMatch[1]) : general;
+                    const valid = m => m > 0 && m < 1;
+                    const promo = (valid(general) || valid(house))
+                        ? { general: valid(general) ? general : 0, house: valid(house) ? house : 0 }
+                        : null;
+                    if (JSON.stringify(promo) !== JSON.stringify(AppState.upgradePromo)) {
+                        // New or ended promo: forget the formula learned for the previous one.
+                        AppState.upgradePriceMode = null;
+                        await setDbValue('upgradePriceMode', null);
+                    }
+                    AppState.upgradePromo = promo;
+                    await setDbValue('upgradePromo', promo);
+                    if (promo) console.log('[Sync] Upgrade promo detected:', promo);
+                } catch (e) {
+                    console.warn('[Sync] Could not read upgrade promo, using regular prices.', e);
+                }
 
                 // Reconcile: If we have an existing inventory sync, its values are the "Truth"
                 const inv = await getDbValue('inventory');
@@ -3288,6 +3318,55 @@
         }
     }
 
+    // Upgrade price formulas. The game's upgrade map always holds the regular price; during a promo the
+    // server expects the discounted one as shownCost. Which formula the game uses isn't documented, so the
+    // candidates are tried in order and the one the server accepts is remembered. A wrong shownCost is
+    // simply rejected by the server, so trying a candidate never charges a different amount.
+    const UPGRADE_PRICE_MODES = {
+        discount: (base, m) => Math.round(base * (1 - m)),      // m = share taken off (0.3 → 30% off)
+        discountCeil: (base, m) => Math.ceil(base * (1 - m)),
+        discountFloor: (base, m) => Math.floor(base * (1 - m)),
+        multiply: (base, m) => Math.round(base * m),            // m = share paid (0.3 → pay 30%)
+        multiplyCeil: (base, m) => Math.ceil(base * m),
+        multiplyFloor: (base, m) => Math.floor(base * m),
+        full: base => base
+    };
+
+    function getUpgradePromoMultiplier(comp) {
+        const promo = AppState.upgradePromo;
+        if (!promo) return 0;
+        return comp && comp.industry_token === 'HOUSE' ? promo.house : promo.general;
+    }
+
+    // Ordered, de-duplicated list of { mode, cost } to try for one company upgrade.
+    function getUpgradeCostCandidates(comp, level) {
+        const base = parseInt(comp.upgrades[level].cost) || 0;
+        const m = getUpgradePromoMultiplier(comp);
+        if (!m) return [{ mode: 'full', cost: base }];
+        const order = Object.keys(UPGRADE_PRICE_MODES);
+        if (AppState.upgradePriceMode && order.includes(AppState.upgradePriceMode)) {
+            order.splice(order.indexOf(AppState.upgradePriceMode), 1);
+            order.unshift(AppState.upgradePriceMode);
+        }
+        const seen = new Set();
+        return order
+            .map(mode => ({ mode, cost: UPGRADE_PRICE_MODES[mode](base, m) }))
+            .filter(c => !seen.has(c.cost) && seen.add(c.cost));
+    }
+
+    // Best guess at what one upgrade will cost (the first candidate).
+    function getEstimatedUpgradeCost(comp, level) {
+        return getUpgradeCostCandidates(comp, level)[0].cost;
+    }
+
+    function getUpgradePromoNote(comp) {
+        const m = getUpgradePromoMultiplier(comp);
+        if (!m) return '';
+        return AppState.upgradePriceMode
+            ? 'Promo price active (confirmed by the game).'
+            : 'Promo price active. Estimate assumes ' + Math.round(m * 100) + '% off; the exact price is confirmed on the first upgrade.';
+    }
+
     async function performMassUpgrade() {
         const targetQ = parseInt(document.getElementById('upgrade-target-q').value);
         const amountInput = document.getElementById('upgrade-amount');
@@ -3310,9 +3389,9 @@
         const toUpgrade = upgradableSet.slice(0, amount);
         let totalCost = 0;
         toUpgrade.forEach(c => {
-            const levelData = c.upgrades[targetQ];
-            totalCost += parseInt(levelData.cost);
+            totalCost += getEstimatedUpgradeCost(c, targetQ);
         });
+        const promoNote = getUpgradePromoNote(toUpgrade[0]);
 
         const holdingId = AppState.filters.holding;
         const h = AppState.holdingsMap[holdingId];
@@ -3327,6 +3406,7 @@
             `<span style="color:var(--on-surface-variant)">Companies</span><span><strong>${toUpgrade.length}×</strong> ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}</span>` +
             `<span style="color:var(--on-surface-variant)">Location</span><span>${hName} · ${regionData.name}</span>` +
             `<span style="color:var(--on-surface-variant)">Cost</span><span style="color:#fabd00;font-weight:600;">${totalCost.toLocaleString()} Gold</span>` +
+            (promoNote ? `<span></span><span style="color:var(--on-surface-variant);font-size:0.7rem;">${promoNote}</span>` : '') +
             `</div>`;
 
         if (!await showConfirmModal('Mass Upgrade', upgradeBodyHtml, 'Upgrade')) return;
@@ -3338,6 +3418,8 @@
         try {
             let successCount = 0;
             let successIds = [];
+            let goldSpent = 0;
+            const failures = {};                  // last server message per failed company
             let lockRetryQueue = [...toUpgrade];
             let attempts = 0;
             const maxAttemptsPerCompany = 3;
@@ -3351,16 +3433,35 @@
                 if (successCount > 0 || attempts > 0) await sleep(500);
                 attempts++;
 
-                const levelData = c.upgrades[targetQ];
-                const payload = `_token=${AppState.csrfToken}&type=upgrade&companyId=${c.id}&level=${targetQ}&pin=false&shownCost=${levelData.cost}`;
-
                 try {
-                    const responseTxt = await apiPost('https://www.erepublik.com/en/economy/upgrade-company', payload);
-                    const res = JSON.parse(responseTxt);
+                    // Try each price candidate until the server stops answering "Wrong price shown".
+                    const candidates = getUpgradeCostCandidates(c, targetQ);
+                    let res = null;
+                    let paid = 0;
+                    for (let i = 0; i < candidates.length; i++) {
+                        if (i > 0) await sleep(500);
+                        const cand = candidates[i];
+                        const payload = `_token=${AppState.csrfToken}&type=upgrade&companyId=${c.id}&level=${targetQ}&pin=false&shownCost=${cand.cost}`;
+                        const responseTxt = await apiPost('https://www.erepublik.com/en/economy/upgrade-company', payload);
+                        res = JSON.parse(responseTxt);
+                        if (res.status === true) {
+                            paid = cand.cost;
+                            if (getUpgradePromoMultiplier(c) && AppState.upgradePriceMode !== cand.mode) {
+                                console.log(`[Upgrade] Promo price confirmed: ${cand.mode} (${cand.cost} Gold).`);
+                                AppState.upgradePriceMode = cand.mode;
+                                await setDbValue('upgradePriceMode', cand.mode);
+                            }
+                            break;
+                        }
+                        if (!/wrong price/i.test(res.message || '')) break;
+                        console.warn(`[Upgrade] Company ${c.id}: price ${cand.cost} (${cand.mode}) rejected, trying next.`);
+                    }
 
                     if (res.status === true) {
                         successCount++;
                         successIds.push(c.id);
+                        goldSpent += paid;
+                        delete failures[c.id];
                         btn.textContent = `Upgrading (${successCount}/${toUpgrade.length})...`;
                     } else if (res.message === 'lock') {
                         if (companyAttemptCount[c.id] < maxAttemptsPerCompany) {
@@ -3371,9 +3472,11 @@
                             console.error(`[Upgrade] Company ${c.id} still locked after ${maxAttemptsPerCompany} attempts. Giving up.`);
                         }
                     } else {
+                        failures[c.id] = res.message || 'unknown error';
                         console.error(`[Upgrade] Company ${c.id} failed:`, res);
                     }
                 } catch (e) {
+                    failures[c.id] = String(e);
                     console.error(`[Upgrade] Request error for company ${c.id}:`, e);
                 }
             }
@@ -3416,9 +3519,7 @@
                 await setDbValue('companies', fullCompanies);
 
                 // Deduct gold cost from inventory so loadDataFromDb reads the correct balance
-                const actualGoldSpent = toUpgrade
-                    .filter(c => successIds.includes(c.id))
-                    .reduce((sum, c) => sum + parseInt((c.upgrades && c.upgrades[targetQ] && c.upgrades[targetQ].cost) || 0), 0);
+                const actualGoldSpent = goldSpent;
                 if (actualGoldSpent > 0) {
                     const inv = await getDbValue('inventory');
                     if (Array.isArray(inv)) {
@@ -3434,7 +3535,17 @@
                 await loadDataFromDb(); // Re-render UI from updated local DB
             }
 
-            showToast(`Successfully upgraded ${successCount} companies to Q${targetQ}!`, successCount === toUpgrade.length ? 'success' : 'info');
+            const failMessages = [...new Set(Object.values(failures))];
+            if (successCount === 0 && failMessages.length) {
+                const priceIssue = failMessages.some(m => /wrong price/i.test(m));
+                showToast(priceIssue
+                    ? 'The game rejected the upgrade price. A sale may have started or ended: run an Infrastructure sync and try again.'
+                    : `No companies upgraded: ${failMessages.join(', ')}`, 'error');
+            } else {
+                showToast(`Successfully upgraded ${successCount} companies to Q${targetQ}!` +
+                    (failMessages.length ? ` ${toUpgrade.length - successCount} failed: ${failMessages.join(', ')}` : ''),
+                    successCount === toUpgrade.length ? 'success' : 'info');
+            }
         } catch (e) {
             console.error('[Upgrade] Unexpected error:', e);
             showToast('Upgrade stopped by an error: ' + e, 'error');
