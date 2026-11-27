@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.13
+// @version      0.14
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -1862,7 +1862,7 @@
             }
 
             let passHolding = true;
-            if (holding === 'unassigned') passHolding = (c.holding_company_id === false);
+            if (holding === 'unassigned') passHolding = !c.holding_company_id; // false (or empty) when not in a holding
             else if (holding !== 'all') passHolding = (c.holding_company_id == holding); // loose == : select value is string, company field is number
 
             let passInd = (industry === 'all') || (calcInd === industry);
@@ -2234,7 +2234,9 @@
         const { holding } = AppState.filters;
         if (holding === 'all' || holding === 'unassigned') {
             btnWam.disabled = true;
-            summary.textContent = 'Select a specific holding to enable Work as Manager.';
+            summary.textContent = holding === 'unassigned'
+                ? 'Unassigned companies can\'t be worked. Assign them to a holding first.'
+                : 'Select a specific holding to enable Work as Manager.';
             if (wamContainer) wamContainer.style.display = 'none';
             AppState._wamEntries = [];
             AppState._wamRegionIds = [];
@@ -2302,6 +2304,23 @@
         const btnAssign = document.getElementById('btn-assign');
         const assignSummary = document.getElementById('assign-summary');
         const empAmount = document.getElementById('emp-amount');
+
+        // Companies outside a holding can't be worked, so employees can't be assigned to them.
+        if (AppState.filters.holding === 'unassigned') {
+            btnAssign.disabled = true;
+            const btnUseMaxEmp = document.getElementById('btn-use-max-emp');
+            if (btnUseMaxEmp) btnUseMaxEmp.disabled = true;
+            empAmount.disabled = true;
+            assignSummary.textContent = 'Unassigned companies can\'t be worked. Assign them to a holding first.';
+            AppState._assignEntries = [];
+            AppState._assignRegionIds = [];
+            if (AppState.virtualList && AppState.virtualList.items) {
+                AppState.virtualList.items.forEach(group => { group.empSim = 0; });
+                AppState.virtualList.render();
+            }
+            return;
+        }
+        empAmount.disabled = false;
 
         let availableSlots = 0;
         let assignableCompanies = 0;
@@ -2392,9 +2411,10 @@
         const isRaw = industry.endsWith('_raw');
         const upgradableIndustries = ['food', 'weapon', 'house', 'aircraft'];
 
-        if (holding === 'all' || holding === 'unassigned') {
+        // Unassigned companies can't be worked, but they can be upgraded.
+        if (holding === 'all') {
             btnUpgrade.disabled = true;
-            upgradeSummary.textContent = 'Select a specific holding to enable mass upgrade.';
+            upgradeSummary.textContent = 'Select a specific holding (or Unassigned Only) to enable mass upgrade.';
         } else if (industry === 'all') {
             btnUpgrade.disabled = true;
             upgradeSummary.textContent = 'Select a specific industry to enable mass upgrade.';
@@ -2418,10 +2438,7 @@
                     btnUpgrade.disabled = true;
                     upgradeSummary.textContent = `No Q${currentQ} companies found in this filter that can reach Q${targetQ}.`;
                 } else {
-                    const h = AppState.holdingsMap[holding];
-                    const hName = h ? h.name : 'Unknown';
-                    const rId = h ? h.region_id : null;
-                    const regionData = regionMap[rId] || { name: `Region ${rId}`, permalink: '#' };
+                    const { hName, regionName } = describeUpgradeHolding(holding);
 
                     const amountToUpgrade = Math.min(parseInt(document.getElementById('upgrade-amount').value) || 1, upgradableSet.length);
                     const sampleComp = upgradableSet[0];
@@ -2434,7 +2451,7 @@
                     upgradeSummary.innerHTML = `
                         <div style="font-size:0.6875rem; color:var(--secondary); margin-top:5px; line-height:1.5;">
                             → Holding: <strong>${hName}</strong><br>
-                            → Region: <strong>${regionData.name}</strong><br>
+                            → Region: <strong>${regionName}</strong><br>
                             → Target: <strong>${amountToUpgrade} ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}</strong><br>
                             → Est. Total Cost: <strong style="color:var(--primary)">${totalCost.toLocaleString()} Gold</strong>
                             ${promoNote ? `<br><span style="opacity:0.8">${promoNote}</span>` : ''}
@@ -3447,6 +3464,15 @@
         });
     }
 
+    // Holding and region labels for the upgrade summary and confirm modal.
+    function describeUpgradeHolding(holdingId) {
+        if (holdingId === 'unassigned') return { hName: 'Unassigned', regionName: 'No holding' };
+        const h = AppState.holdingsMap[holdingId];
+        const rId = h ? h.region_id : null;
+        const regionData = regionMap[rId] || { name: `Region ${rId}` };
+        return { hName: h ? h.name : 'Unknown', regionName: regionData.name };
+    }
+
     async function performMassUpgrade() {
         const targetQ = parseInt(document.getElementById('upgrade-target-q').value);
         const amountInput = document.getElementById('upgrade-amount');
@@ -3473,18 +3499,14 @@
         });
         const promoNote = getUpgradePromoNote(toUpgrade[0]);
 
-        const holdingId = AppState.filters.holding;
-        const h = AppState.holdingsMap[holdingId];
-        const hName = h ? h.name : 'Unknown';
-        const rId = h ? h.region_id : null;
-        const regionData = regionMap[rId] || { name: `Region ${rId}`, permalink: '#' };
+        const { hName, regionName } = describeUpgradeHolding(AppState.filters.holding);
         const industry = AppState.filters.industry;
         const currentQ = AppState.filters.quality;
 
         const upgradeBodyHtml =
             `<div style="display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:0.8rem;">` +
             `<span style="color:var(--on-surface-variant)">Companies</span><span><strong>${toUpgrade.length}×</strong> ${formatIndustryName(industry)} Q${currentQ} → Q${targetQ}</span>` +
-            `<span style="color:var(--on-surface-variant)">Location</span><span>${hName} · ${regionData.name}</span>` +
+            `<span style="color:var(--on-surface-variant)">Location</span><span>${hName} · ${regionName}</span>` +
             `<span style="color:var(--on-surface-variant)">Cost</span><span style="color:#fabd00;font-weight:600;">${totalCost.toLocaleString()} Gold</span>` +
             (promoNote ? `<span></span><span style="color:var(--on-surface-variant);font-size:0.7rem;">${promoNote}</span>` : '') +
             `</div>`;
