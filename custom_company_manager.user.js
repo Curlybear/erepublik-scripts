@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         eRepublik Custom Company Manager
-// @version      0.12
+// @version      0.13
 // @description  Offline-first company dashboard with virtual-list rendering for 1000+ companies. Syncs infrastructure, workforce, inventory, and energy to IndexedDB. Mass WAM, employee assignment, overtime, and gold upgrades with pre-action simulation and confirmation. Tracks employee work pool across game days. Regional productivity from internal sync or external API with freshness warnings. Centralized production estimates with storage and raw material projections.
 // @author       Curlybear
 // @match        https://www.erepublik.com/en*
@@ -1184,6 +1184,12 @@
                 /* Sidebar */
                 #ccm-sidebar { width: 20%; flex-shrink: 0; border-right: 1px solid var(--border); padding: 20px 16px; overflow-y: auto; background: rgba(15,20,32,0.6); }
                 .ccm-section-title { font-size: 11px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+                .ccm-section-title.ccm-collapsible { cursor: pointer; user-select: none; }
+                .ccm-section-title.ccm-collapsible:hover { opacity: 0.85; }
+                .ccm-section-title .ccm-chevron { margin-left: auto; font-size: 10px; color: var(--muted); transition: transform 0.18s; }
+                .ccm-section-title.ccm-collapsed { margin-bottom: 0; }
+                .ccm-section-title.ccm-collapsed .ccm-chevron { transform: rotate(-90deg); }
+                .ccm-section-body.ccm-collapsed { display: none; }
                 .ccm-label { font-size: 10px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 6px; }
                 .ccm-divider { border-top: 1px solid var(--border); margin: 18px 0; }
                 .ccm-field { margin-bottom: 10px; }
@@ -1595,6 +1601,7 @@
         document.getElementById('upgrade-target-q').addEventListener('change', updateActionUI); document.getElementById('upgrade-amount').addEventListener('input', updateActionUI);
 
         document.getElementById('btn-mass-upgrade').addEventListener('click', performMassUpgrade);
+        initCollapsibleSidebarSections();
         document.getElementById('btn-work-emp').addEventListener('click', performEmployeeWork);
         document.getElementById('btn-work-ot').addEventListener('click', performOvertimeWork);
 
@@ -3365,6 +3372,79 @@
         return AppState.upgradePriceMode
             ? 'Promo price active (confirmed by the game).'
             : 'Promo price active. Estimate assumes ' + Math.round(m * 100) + '% off; the exact price is confirmed on the first upgrade.';
+    }
+
+    // Makes every sidebar section except Filters collapsible. Each section's content (everything between
+    // its title and the next divider) is wrapped in a body that toggles when the title is clicked.
+    // Collapsed state is kept per section in userscript storage so it survives reloads.
+    const COLLAPSED_SECTIONS_KEY = 'ccmCollapsedSections';
+
+    function loadCollapsedSections() {
+        try {
+            const raw = GM_getValue(COLLAPSED_SECTIONS_KEY, '{}');
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            console.warn('[Sidebar] Could not read collapsed sections, showing all expanded.', e);
+            return {};
+        }
+    }
+
+    function saveCollapsedSections(state) {
+        try {
+            GM_setValue(COLLAPSED_SECTIONS_KEY, JSON.stringify(state));
+        } catch (e) {
+            console.warn('[Sidebar] Could not save collapsed sections.', e);
+        }
+    }
+
+    function initCollapsibleSidebarSections() {
+        const sidebar = document.getElementById('ccm-sidebar');
+        if (!sidebar) return;
+        const state = loadCollapsedSections();
+
+        sidebar.querySelectorAll(':scope > .ccm-section-title').forEach(title => {
+            const label = (title.firstChild && title.firstChild.textContent || title.textContent).trim();
+            const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            if (!key || key === 'filters') return;
+
+            const body = document.createElement('div');
+            body.className = 'ccm-section-body';
+            let next = title.nextSibling;
+            while (next && !(next.nodeType === 1 && next.classList.contains('ccm-divider'))) {
+                const current = next;
+                next = next.nextSibling;
+                body.appendChild(current);
+            }
+            title.after(body);
+
+            const chevron = document.createElement('span');
+            chevron.className = 'ccm-chevron';
+            chevron.textContent = '▾';
+            title.appendChild(chevron);
+            title.classList.add('ccm-collapsible');
+            title.setAttribute('role', 'button');
+            title.setAttribute('tabindex', '0');
+
+            const apply = collapsed => {
+                title.classList.toggle('ccm-collapsed', collapsed);
+                body.classList.toggle('ccm-collapsed', collapsed);
+                title.setAttribute('aria-expanded', String(!collapsed));
+            };
+            apply(!!state[key]);
+
+            const toggle = e => {
+                if (e.target.closest('.info-tooltip')) return;
+                const collapsed = !title.classList.contains('ccm-collapsed');
+                apply(collapsed);
+                if (collapsed) state[key] = true; else delete state[key];
+                saveCollapsedSections(state);
+            };
+            title.addEventListener('click', toggle);
+            title.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); }
+            });
+        });
     }
 
     async function performMassUpgrade() {
